@@ -320,8 +320,19 @@ export function resolveCircleWalls(pos: Vec2, radius: number, walls: RectWall[])
     const dx = x - nearestX;
     const dy = y - nearestY;
     const distSq = dx * dx + dy * dy;
-    if (distSq < radius * radius) {
-      const dist = Math.sqrt(distSq) || 0.001;
+    if (distSq < 1e-8) {
+      // Circle center is inside the AABB: push cleanly out to the nearest exterior edge + radius!
+      const dLeft = x - w.x;
+      const dRight = w.x + w.w - x;
+      const dTop = y - w.y;
+      const dBot = w.y + w.h - y;
+      const m = Math.min(dLeft, dRight, dTop, dBot);
+      if (m === dLeft) x = w.x - radius;
+      else if (m === dRight) x = w.x + w.w + radius;
+      else if (m === dTop) y = w.y - radius;
+      else y = w.y + w.h + radius;
+    } else if (distSq < radius * radius) {
+      const dist = Math.sqrt(distSq);
       const overlap = radius - dist;
       x += (dx / dist) * overlap;
       y += (dy / dist) * overlap;

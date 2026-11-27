@@ -120,9 +120,20 @@ async function runTests() {
     { id: 'screen1', x: 100, y: 80, w: 40, h: 120, kind: 'screen' },
     { id: 'canal', x: 300, y: 80, w: 60, h: 120, kind: 'water' },
   ];
-  // Circle collision pushes player out of solid screen
+  // Circle collision pushes player out of solid screen (including interior center ejection!)
   const pushed = resolveCircleWalls({ x: 92, y: 120 }, 16, testWalls);
   assert.ok(pushed.x <= 84.01, `Player circle should be pushed left of wall x=100, got ${pushed.x}`);
+
+  // Regression check #3 (v4.0 QA): Interior center + sub-stepped 34px lunge must NEVER tunnel through unbroken secret wall!
+  const xjWalls = RAID_MAPS.heshen_manor.walls;
+  let lungeY = 426; // standing directly south of xj_sec (y=382..410)
+  for (let s = 0; s < 4; s++) {
+    const stepped = resolveCircleWalls({ x: 880, y: lungeY - 34 / 4 }, 16, xjWalls);
+    lungeY = stepped.y;
+  }
+  assert.ok(lungeY >= 425.9, `Sub-stepped lunge must NOT tunnel through unbroken xj_sec (got y=${lungeY})`);
+  const ejected = resolveCircleWalls({ x: 880, y: 400 }, 16, xjWalls);
+  assert.ok(ejected.y >= 425.9 || ejected.y <= 366.1, `Interior circle center must be ejected cleanly outside wall (got y=${ejected.y})`);
 
   // Screen blocks guard LOS; water does NOT block guard LOS!
   assert.equal(

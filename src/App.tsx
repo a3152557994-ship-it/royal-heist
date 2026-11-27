@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import confetti from 'canvas-confetti';
 import {
+  BookOpen,
   Crown,
   Download,
   Eye,
@@ -14,7 +15,6 @@ import {
   Sailboat,
   Shield,
   Sparkles,
-  Swords,
   Volume2,
   VolumeX,
   Wrench,
@@ -35,38 +35,45 @@ import {
   UPGRADE_TIERS,
   verifyOpcLicenseToken,
 } from './utils/raiderSave';
-import { RaidActionView } from './components/RaidActionView';
+import { RaidScene3D } from './engine3d/RaidScene3D';
+import { Raid3DView } from './components/Raid3DView';
 import { renderRaidLootPoster } from './utils/raidPoster';
 import { sound } from './audio/soundEngine';
 
-const MAP_ART: Record<MapId, { img: string; badge: string; accent: string }> = {
+const MAP_BADGES: Record<MapId, { tag: string; short: string; ring: string }> = {
   salt_office: {
-    img: './assets/char_duke.webp',
-    badge: '新手爽摸 · 8箱珍宝',
-    accent: 'border-sky-500/50',
+    tag: '新手爽摸 · 8箱珍宝',
+    short: '两淮盐运司',
+    ring: 'border-sky-400/70 bg-sky-950/55',
   },
   heshen_manor: {
-    img: './assets/char_heshen.webp',
-    badge: '🔥 王牌爆红 · 锡晋斋夹墙',
-    accent: 'border-amber-400/80 ring-1 ring-amber-400/40',
+    tag: '🔥 王牌爆红 · 锡晋斋夹墙',
+    short: '和大人王府',
+    ring: 'border-amber-400/90 bg-amber-950/60 ring-1 ring-amber-400/40',
   },
   forbidden_vault: {
-    img: './assets/char_emperor.webp',
-    badge: '🐉 炼狱皇库 · 满地传国玺',
-    accent: 'border-rose-500/60',
+    tag: '🐉 炼狱皇库 · 满地传国玺',
+    short: '紫禁皇库',
+    ring: 'border-rose-500/80 bg-rose-950/55',
   },
 };
 
-const SHOWCASE_TREASURE_IDS = [
+const ALL_TREASURE_IDS = [
   'imperial_seal',
   'gold_buddha',
   'phoenix_crown',
   'emerald_cabbage',
   'dragon_cup',
   'gold_abacus',
+  'jade_ruyi',
+  'secret_ledger',
+  'night_pearl',
+  'porcelain_vase',
+  'guard_token',
+  'silver_ingot',
 ];
 
-const CanvasTreasureBadge: React.FC<{ defId: string; size?: number }> = ({ defId, size = 44 }) => {
+const AntiqueBadge: React.FC<{ defId: string; size?: number }> = ({ defId, size = 42 }) => {
   const def = TREASURES[defId];
   return (
     <img
@@ -88,6 +95,8 @@ export const App: React.FC = () => {
   const [posterRewardClaimed, setPosterRewardClaimed] = useState(false);
 
   const [muted, setMuted] = useState(false);
+  const [shopOpen, setShopOpen] = useState(false);
+  const [codexOpen, setCodexOpen] = useState(false);
   const [saveModalOpen, setSaveModalOpen] = useState(false);
   const [proModalOpen, setProModalOpen] = useState(false);
 
@@ -97,9 +106,10 @@ export const App: React.FC = () => {
   const [licenseInput, setLicenseInput] = useState('');
   const [licenseFeedback, setLicenseFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  const lobby3dMountRef = useRef<HTMLDivElement | null>(null);
   const isPro = !IS_PURE_PLATFORM_MODE && Boolean(profile.proLicenseToken);
 
-  // Preload 2.5D high-res sprites, tiles, and 12 painted antiques immediately
+  // Preload 12 museum-grade painted antique icons for Tetris Backpack & Share Poster
   useEffect(() => {
     preloadGameAtlas();
   }, []);
@@ -109,7 +119,7 @@ export const App: React.FC = () => {
     saveRaiderProfile(profile);
   }, [profile]);
 
-  // Strictly re-verify stored Ed25519 token on mount to prevent localStorage DevTools spoofing
+  // Strictly re-verify stored Ed25519 token on mount to prevent localStorage spoofing
   useEffect(() => {
     if (IS_PURE_PLATFORM_MODE || !profile.proLicenseToken) return;
     let cancelled = false;
@@ -134,9 +144,30 @@ export const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Live 3D Moonlit Royal Palace Backdrop right inside the Lobby (100% outside/inside parity!)
+  useEffect(() => {
+    if (view !== 'lobby') return;
+    const container = lobby3dMountRef.current;
+    if (!container) return;
+
+    const preview = new RaidScene3D({
+      container,
+      mode: 'lobby_preview',
+      mapId: activeMapId,
+      profile,
+      isPro,
+    });
+    return () => {
+      preview.dispose();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, activeMapId]);
+
   const startRaid = (mapId: MapId) => {
     sound.playTap();
     setActiveMapId(mapId);
+    setShopOpen(false);
+    setCodexOpen(false);
     setRaidKey((k) => k + 1);
     setPosterUrl(null);
     setPosterRewardClaimed(false);
@@ -279,36 +310,50 @@ export const App: React.FC = () => {
     setSaveInput('');
   };
 
+  const selectedMap = RAID_MAPS[activeMapId];
+  const anyUpgradeAffordable = (Object.keys(UPGRADE_TIERS) as Array<keyof typeof UPGRADE_TIERS>).some(
+    (k) => {
+      const lv = profile.upgrades[k];
+      const tiers = UPGRADE_TIERS[k];
+      return lv < tiers.length - 1 && profile.vaultSilverWan >= tiers[lv + 1].costWan;
+    }
+  );
+
   return (
-    <div className="min-h-dvh flex flex-col bg-[#090706] text-amber-50">
-      {/* TOP BAR (52px exact height for RaidActionView viewport math) */}
-      <header className="h-[52px] shrink-0 px-3 border-b border-amber-500/25 bg-[#110B08]/95 backdrop-blur-md flex items-center justify-between gap-2 z-30">
+    <div
+      className={`${
+        view === 'outcome' ? 'min-h-dvh' : 'h-dvh overflow-hidden'
+      } flex flex-col bg-[#080b14] text-amber-50`}
+    >
+      {/* TOP BAR (Exact 52px height for seamless 3D viewport calculation) */}
+      <header className="h-[52px] shrink-0 px-2.5 sm:px-3 border-b border-amber-500/25 bg-[#0c0e16]/90 backdrop-blur-md flex items-center justify-between gap-1.5 z-30">
         <button
           onClick={() => {
             sound.playTap();
             setView('lobby');
           }}
-          className="flex items-center gap-2 text-left cursor-pointer"
+          className="flex items-center gap-2 text-left cursor-pointer min-w-0"
         >
-          <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-rose-600 flex items-center justify-center text-black font-black text-sm shadow">
+          <span className="w-7 h-7 shrink-0 rounded-lg bg-gradient-to-br from-amber-400 to-rose-600 flex items-center justify-center text-black font-black text-sm shadow">
             夜
           </span>
-          <div className="leading-tight">
-            <div className="text-sm font-extrabold text-amber-200 tracking-wide flex items-center gap-1.5">
-              <span>夜探王府：摸金撤离</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-300 hidden sm:inline">
-                60帧潜行搜打撤
+          <div className="leading-tight whitespace-nowrap">
+            <div className="text-xs sm:text-sm font-extrabold text-amber-200 tracking-wide flex items-center gap-1.5">
+              <span className="sm:hidden">夜探王府</span>
+              <span className="hidden sm:inline">夜探王府：摸金撤离</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-300 hidden md:inline">
+                3D实时光影 · 潜行搜打撤
               </span>
             </div>
           </div>
         </button>
 
-        <div className="flex items-center gap-1.5 sm:gap-2">
+        <div className="flex items-center gap-1 sm:gap-2 shrink-0">
           {/* Permanent Vault Silver */}
-          <div className="px-2.5 py-1 rounded-lg bg-stone-900/90 border border-amber-500/35 text-xs flex items-center gap-1.5">
+          <div className="px-2 py-1 rounded-lg bg-black/70 border border-amber-500/35 text-[11px] sm:text-xs flex items-center gap-1 whitespace-nowrap">
             <span className="text-stone-400 hidden md:inline">金库:</span>
             <b className="text-amber-300 font-mono">{formatSilver(profile.vaultSilverWan)}</b>
-            <span className="text-[10px] text-emerald-300 border-l border-stone-700 pl-1.5">
+            <span className="text-[10px] text-emerald-300 border-l border-stone-700 pl-1">
               💊{isPro ? '∞' : profile.freeRevivePills}
             </span>
           </div>
@@ -320,7 +365,7 @@ export const App: React.FC = () => {
               setSaveFeedback(null);
               setSaveModalOpen(true);
             }}
-            className="px-2.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+            className="px-2 py-1.5 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-700 text-stone-200 text-xs font-bold flex items-center gap-1 cursor-pointer whitespace-nowrap"
             title="跨设备存档备份"
           >
             <HardDriveDownload className="w-3.5 h-3.5 text-amber-300" />
@@ -335,21 +380,22 @@ export const App: React.FC = () => {
                 setLicenseFeedback(null);
                 setProModalOpen(true);
               }}
-              className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer shadow ${
+              className={`px-2 sm:px-2.5 py-1.5 rounded-lg text-[11px] sm:text-xs font-extrabold flex items-center gap-1 cursor-pointer shadow whitespace-nowrap ${
                 isPro
                   ? 'bg-gradient-to-r from-amber-300 to-amber-500 text-black'
                   : 'bg-gradient-to-r from-rose-600 to-amber-500 text-white'
               }`}
             >
-              <Crown className="w-3.5 h-3.5" />
-              <span>{isPro ? '金手指已开' : '总管金手指'}</span>
+              <Crown className="w-3.5 h-3.5 shrink-0" />
+              <span className="sm:hidden">{isPro ? '已开' : '金手指'}</span>
+              <span className="hidden sm:inline">{isPro ? '金手指已开' : '总管金手指'}</span>
             </button>
           )}
 
           {/* Audio Mute */}
           <button
             onClick={() => setMuted(sound.toggleMute())}
-            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-300 cursor-pointer"
+            className="p-1.5 rounded-lg bg-stone-900/90 hover:bg-stone-800 border border-stone-700 text-stone-300 cursor-pointer shrink-0"
             aria-label="切换音效"
           >
             {muted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-amber-300" />}
@@ -357,195 +403,142 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* ==================== VIEW 1: VISUAL RAID LOBBY ==================== */}
+      {/* ==================== VIEW 1: LIVE 3D PALACE TITLE & MAP LOBBY ==================== */}
       {view === 'lobby' && (
-        <main
-          className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-5 py-4 space-y-5 bg-cover bg-center"
-          style={{
-            backgroundImage:
-              'linear-gradient(to bottom, rgba(9,7,6,0.88), rgba(9,7,6,0.97)), url(./assets/bg_vault_desk.webp)',
-          }}
-        >
-          {/* Compact Visual Controls Bar (Zero Text Walls) */}
-          <section className="rounded-2xl wood-panel px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-amber-100">
-              <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-400/30">
-                🕹️ 摇杆 / WASD 潜行避灯笼
-              </span>
-              <span className="px-2.5 py-1 rounded-full bg-rose-500/15 border border-rose-400/30">
-                🔨 贴近撬暗墙 · 读圈开龙柜爆大红
-              </span>
-              <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30">
-                🎒 俄罗斯方块塞包 · 冲回绿圈登船落袋
-              </span>
-            </div>
-            <div className="text-[11px] text-stone-400 font-mono">
-              累计撤离 {profile.totalEscapes}/{profile.totalRaids} 局 · 最高单局 {formatSilver(profile.bestRaidWan)} · 传世大红 {profile.mythicsFound} 件
-            </div>
-          </section>
+        <main className="relative flex-1 w-full overflow-hidden">
+          {/* LIVE 60FPS THREE.JS 3D ROYAL PALACE STAGE */}
+          <div ref={lobby3dMountRef} className="absolute inset-0 w-full h-full" />
 
-          {/* 3 Visual Raid Map Cards */}
-          <section className="space-y-2.5">
-            <div className="flex items-center justify-between">
-              <h2 className="text-base sm:text-lg font-extrabold text-amber-300 flex items-center gap-1.5">
-                <Swords className="w-5 h-5 text-amber-400" />
-                <span>选择今夜潜入目标（点选即刻60帧实机开摸）</span>
-              </h2>
-            </div>
+          {/* Subtle cinematic edge gradients so UI stays razor-sharp while middle 3D palace gleams */}
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[#070a12]/70 via-transparent via-45% to-[#070a12]/90" />
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-              {(Object.keys(RAID_MAPS) as MapId[]).map((mId) => {
-                const m = RAID_MAPS[mId];
-                const art = MAP_ART[mId];
-                return (
-                  <div
-                    key={mId}
-                    onClick={() => startRaid(mId)}
-                    className={`group rounded-2xl wood-panel overflow-hidden border ${art.accent} hover:scale-[1.01] transition cursor-pointer flex flex-col`}
-                  >
-                    <div className="relative h-38 overflow-hidden bg-stone-950">
-                      <img
-                        src={art.img}
-                        alt={m.name}
-                        className="w-full h-full object-cover object-top group-hover:scale-105 transition duration-500 opacity-90"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-[#120B08] via-black/30 to-transparent" />
-                      <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/80 border border-amber-400/50 text-[11px] font-extrabold text-amber-300">
-                        {art.badge}
-                      </span>
-                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded bg-red-950/85 border border-red-500/40 text-[10px] font-mono text-red-200">
-                        {m.escapeRateLabel}
-                      </span>
-                      <div className="absolute bottom-2 left-3 right-3 flex items-end justify-between">
-                        <h3 className="text-lg font-black text-white drop-shadow">{m.name}</h3>
-                        <span className="text-xs font-mono text-amber-300">限时 {m.durationSec}s</span>
-                      </div>
-                    </div>
-
-                    <div className="p-3.5 flex-1 flex flex-col justify-between gap-3">
-                      <p className="text-xs text-stone-300 leading-relaxed">{m.subtitle}</p>
-                      <div className="flex items-center justify-between text-[11px] text-stone-400">
-                        <span>📦 宝箱 {m.chests.length} 处</span>
-                        <span>🏮 巡逻卫 {m.guards.length} 名</span>
-                        <span>🔨 密室暗墙</span>
-                      </div>
-                      <button
-                        type="button"
-                        className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-600 group-hover:from-amber-300 group-hover:to-amber-500 text-black font-black text-sm flex items-center justify-center gap-1.5 shadow-lg cursor-pointer"
-                      >
-                        <Flame className="w-4 h-4" />
-                        <span>夜行潜入 · 开箱摸大红</span>
-                      </button>
-                    </div>
+          {/* Floating Overlay Layout: scrollable safety on short mobile screens + 3-col compact map bar! */}
+          <div className="absolute inset-0 z-10 overflow-y-auto">
+            <div className="min-h-full max-w-6xl mx-auto px-3 sm:px-6 py-3 sm:py-5 flex flex-col justify-between gap-3 pointer-events-none">
+              {/* TOP HERO TITLE + QUICK DRAWERS */}
+              <div className="flex flex-wrap items-start justify-between gap-2.5">
+                <div className="space-y-1 max-w-2xl">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-400/50 text-[10px] sm:text-[11px] font-extrabold text-amber-200 backdrop-blur-md">
+                    <Sparkles className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-amber-300" />
+                    <span>实时 3D 光影引擎 · 实机画面即所见</span>
                   </div>
-                );
-              })}
-            </div>
-          </section>
+                  <h1 className="font-serif-cn text-2xl sm:text-5xl font-black text-white tracking-wider whitespace-nowrap drop-shadow-[0_4px_20px_rgba(0,0,0,0.95)]">
+                    夜探王府<span className="text-amber-400">·</span>摸金撤离
+                  </h1>
+                  <p className="hidden sm:block text-sm text-amber-100/90 max-w-xl drop-shadow-[0_2px_8px_rgba(0,0,0,0.95)]">
+                    潜入月夜清代王府，避开提灯锦衣卫、撬破锡晋斋夹墙、开龙柜爆传世大红，登乌篷快船落袋为安！
+                  </p>
+                </div>
 
-          {/* Black-Market Gear Upgrade Workshop */}
-          <section className="rounded-2xl wood-panel p-4 space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-sm sm:text-base font-extrabold text-amber-300 flex items-center gap-1.5">
-                <Wrench className="w-4 h-4 text-amber-400" />
-                <span>鬼市夜行黑店 · 用撤离真金白银永久升级装备</span>
-              </h2>
-              <span className="text-xs text-stone-400">
-                可用金库银两：<b className="text-amber-300">{formatSilver(profile.vaultSilverWan)}</b>
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
-              {(
-                [
-                  { key: 'bagLevel', title: '🎒 乾坤扩容包袱', icon: Package },
-                  { key: 'bootsLevel', title: '🥾 踏雪神行快靴', icon: Feather },
-                  { key: 'armorLevel', title: '🛡️ 天蚕护心内甲', icon: Shield },
-                  { key: 'gloveLevel', title: '🧤 发丘秒开巧钳', icon: Zap },
-                ] as const
-              ).map(({ key, title }) => {
-                const lv = profile.upgrades[key];
-                const tiers = UPGRADE_TIERS[key];
-                const maxed = lv >= tiers.length - 1;
-                const next = maxed ? null : tiers[lv + 1];
-                const canAfford = next ? profile.vaultSilverWan >= next.costWan : false;
-
-                return (
-                  <div
-                    key={key}
-                    className="rounded-xl bg-stone-950/85 border border-stone-800 p-3 flex flex-col justify-between gap-2.5"
+                {/* Right Quick Drawers (Black Market & Antique Codex) */}
+                <div className="pointer-events-auto flex items-center gap-1.5 sm:gap-2">
+                  <button
+                    onClick={() => {
+                      sound.playTap();
+                      setShopOpen(true);
+                    }}
+                    className="relative px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-black/70 hover:bg-black/90 border border-amber-400/55 text-amber-200 text-[11px] sm:text-xs font-extrabold flex items-center gap-1 sm:gap-1.5 backdrop-blur-md shadow-xl cursor-pointer"
                   >
-                    <div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-extrabold text-amber-200">{title}</span>
-                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
-                          Lv.{lv}/{tiers.length - 1}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-stone-300 mt-1">{tiers[lv].label}</div>
-                    </div>
+                    <Wrench className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-400" />
+                    <span>鬼市升级</span>
+                    {anyUpgradeAffordable && (
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-ping absolute -top-1 -right-1" />
+                    )}
+                  </button>
 
-                    {maxed ? (
-                      <div className="py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-center text-[11px] font-bold text-emerald-300">
-                        ✨ 已升至满级宗师神装
-                      </div>
-                    ) : (
+                  <button
+                    onClick={() => {
+                      sound.playTap();
+                      setCodexOpen(true);
+                    }}
+                    className="px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl bg-black/70 hover:bg-black/90 border border-rose-400/45 text-rose-200 text-[11px] sm:text-xs font-extrabold flex items-center gap-1 sm:gap-1.5 backdrop-blur-md shadow-xl cursor-pointer"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-rose-400" />
+                    <span>大红图鉴</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* BOTTOM FLOATING MAP SELECTOR + INSTANT PLAY DOCK */}
+              <div className="pointer-events-auto space-y-2 sm:space-y-3">
+                {/* 3 Interactive Live-Preview Map Cards (3-col compact on mobile so CTA NEVER clips!) */}
+                <div className="grid grid-cols-3 gap-1.5 sm:gap-2.5">
+                  {(Object.keys(RAID_MAPS) as MapId[]).map((mId) => {
+                    const m = RAID_MAPS[mId];
+                    const meta = MAP_BADGES[mId];
+                    const selected = activeMapId === mId;
+                    return (
                       <button
-                        onClick={() => handleBuyUpgrade(key)}
-                        disabled={!canAfford}
-                        className={`w-full py-1.5 px-2 rounded-lg text-xs font-extrabold transition cursor-pointer ${
-                          canAfford
-                            ? 'bg-amber-500 hover:bg-amber-400 text-black shadow'
-                            : 'bg-stone-900 text-stone-500 border border-stone-800 cursor-not-allowed'
+                        key={mId}
+                        type="button"
+                        onClick={() => {
+                          sound.playTap();
+                          setActiveMapId(mId);
+                        }}
+                        className={`text-left rounded-xl sm:rounded-2xl p-2 sm:p-3 border backdrop-blur-md transition cursor-pointer ${
+                          selected
+                            ? `${meta.ring} shadow-[0_0_24px_rgba(251,191,36,0.28)] scale-[1.01]`
+                            : 'bg-black/60 hover:bg-black/75 border-stone-700/75 text-stone-300'
                         }`}
                       >
-                        升级 ({formatSilver(next!.costWan)})
+                        <div className="hidden sm:flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-black text-amber-300">{meta.tag}</span>
+                          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-black/60 text-rose-200 border border-rose-500/35">
+                            {m.escapeRateLabel}
+                          </span>
+                        </div>
+                        <div className="sm:mt-1 flex items-baseline justify-between gap-1">
+                          <span className="text-xs sm:text-base font-black text-white truncate">
+                            <span className="sm:hidden">{meta.short}</span>
+                            <span className="hidden sm:inline">{m.name}</span>
+                          </span>
+                          <span className="text-[10px] sm:text-[11px] font-mono text-amber-300 shrink-0">{m.durationSec}s</span>
+                        </div>
+                        <div className="mt-0.5 sm:mt-1 text-[9px] sm:text-[11px] text-stone-300/90 truncate">
+                          <span className="sm:hidden">{m.escapeRateLabel.replace('全服撤离率 ', '撤离')}</span>
+                          <span className="hidden sm:inline">📦 {m.chests.length}处宝箱 · 🏮 {m.guards.length}名提灯侍卫 · 🔨 密室暗墙</span>
+                        </div>
                       </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </section>
+                    );
+                  })}
+                </div>
 
-          {/* Mythic Red & Big Gold Visual Loot Preview Strip */}
-          <section className="rounded-2xl wood-panel p-3.5 space-y-2">
-            <div className="text-xs font-extrabold text-rose-300 flex items-center gap-1.5">
-              <Sparkles className="w-4 h-4 text-rose-400" />
-              <span>王府秘库【传世大红 / 镇国大金】实机掉落图鉴（摸出一件直接单车变摩托）</span>
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
-              {SHOWCASE_TREASURE_IDS.map((id) => {
-                const t = TREASURES[id];
-                const meta = RARITY_META[t.rarity];
-                return (
-                  <div
-                    key={id}
-                    className="rounded-xl p-2 flex items-center gap-2 border"
-                    style={{ background: meta.bg, borderColor: meta.border }}
-                  >
-                    <CanvasTreasureBadge defId={id} size={38} />
-                    <div className="min-w-0">
-                      <div className="text-[11px] font-extrabold text-white truncate">{t.name}</div>
-                      <div className="text-[10px] font-mono text-amber-200">
-                        {formatSilver(t.valueWan)} · {t.gridW}×{t.gridH}格
-                      </div>
+                {/* Primary Launch Bar */}
+                <div className="rounded-2xl bg-black/75 border border-amber-500/40 backdrop-blur-md px-3.5 py-2.5 sm:px-4 sm:py-3 flex flex-wrap items-center justify-between gap-2.5 sm:gap-3 shadow-2xl">
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-extrabold text-amber-200">
+                      目标：<span className="text-white">{selectedMap.name}</span>
+                    </div>
+                    <div className="text-[10px] sm:text-[11px] text-stone-400">
+                      撤离 <b className="text-amber-300">{profile.totalEscapes}/{profile.totalRaids}</b> 局 ·
+                      最高 <b className="text-amber-300">{formatSilver(profile.bestRaidWan)}</b> ·
+                      大红 <b className="text-rose-300">{profile.mythicsFound}</b> 件
                     </div>
                   </div>
-                );
-              })}
+
+                  <button
+                    type="button"
+                    onClick={() => startRaid(activeMapId)}
+                    className="w-full sm:w-auto px-6 sm:px-8 py-2.5 sm:py-3 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:brightness-110 text-black font-black text-sm sm:text-base flex items-center justify-center gap-2 shadow-[0_0_28px_rgba(245,158,11,0.5)] cursor-pointer active:scale-[0.98]"
+                  >
+                    <Flame className="w-4 h-4 sm:w-5 sm:h-5" />
+                    <span>夜行潜入 · 立即开摸</span>
+                  </button>
+                </div>
+              </div>
             </div>
-          </section>
+          </div>
         </main>
       )}
 
-      {/* ==================== VIEW 2: 60FPS ACTION STEALTH RAID ==================== */}
+      {/* ==================== VIEW 2: 60FPS 3D STEALTH-EXTRACTION GAMEPLAY ==================== */}
       {view === 'raid' && (
-        <RaidActionView
+        <Raid3DView
           key={raidKey}
           mapId={activeMapId}
           profile={profile}
           isPro={isPro}
+          externalPaused={saveModalOpen || proModalOpen}
           onFinishRaid={handleFinishRaid}
           onConsumeRevivePill={handleConsumeRevivePill}
           onOpenProModal={() => setProModalOpen(true)}
@@ -602,7 +595,7 @@ export const App: React.FC = () => {
                       className="rounded-xl p-2 border flex items-center gap-2"
                       style={{ background: meta.bg, borderColor: meta.border }}
                     >
-                      <CanvasTreasureBadge defId={def.id} size={36} />
+                      <AntiqueBadge defId={def.id} size={36} />
                       <div className="min-w-0">
                         <div className="text-xs font-extrabold text-white truncate">{def.name}</div>
                         <div className="text-[10px] font-mono text-amber-200">
@@ -615,7 +608,7 @@ export const App: React.FC = () => {
               </div>
             )}
 
-            {/* Share Poster Preview if generated */}
+            {/* Share Poster Preview */}
             {posterUrl && (
               <div className="pt-2 space-y-2">
                 <img
@@ -661,10 +654,137 @@ export const App: React.FC = () => {
               className="w-full py-2.5 rounded-xl bg-stone-950 hover:bg-stone-900 border border-stone-800 text-stone-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
             >
               <Sailboat className="w-4 h-4 text-emerald-400" />
-              <span>返回鬼市大厅 · 用银两升级大包袱与快靴</span>
+              <span>返回 3D 王府大厅 · 用银两升级大包袱与快靴</span>
             </button>
           </div>
         </main>
+      )}
+
+      {/* ==================== MODAL: BLACK-MARKET GEAR UPGRADE SHOP ==================== */}
+      {shopOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl rounded-2xl wood-panel gold-border-glow p-5 space-y-4 max-h-[88dvh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-base font-black text-amber-300 flex items-center gap-1.5">
+                  <Wrench className="w-4 h-4 text-amber-400" />
+                  <span>鬼市夜行黑店 · 永久强化夜行神装</span>
+                </h3>
+                <div className="text-xs text-stone-400 mt-0.5">
+                  当前可用金库银两：<b className="text-amber-300 font-mono">{formatSilver(profile.vaultSilverWan)}</b>
+                </div>
+              </div>
+              <button
+                onClick={() => setShopOpen(false)}
+                className="p-1.5 rounded-lg bg-stone-900 text-stone-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {(
+                [
+                  { key: 'bagLevel', title: '🎒 乾坤扩容包袱', icon: Package },
+                  { key: 'bootsLevel', title: '🥾 踏雪神行快靴', icon: Feather },
+                  { key: 'armorLevel', title: '🛡️ 天蚕护心内甲', icon: Shield },
+                  { key: 'gloveLevel', title: '🧤 发丘秒开巧钳', icon: Zap },
+                ] as const
+              ).map(({ key, title }) => {
+                const lv = profile.upgrades[key];
+                const tiers = UPGRADE_TIERS[key];
+                const maxed = lv >= tiers.length - 1;
+                const next = maxed ? null : tiers[lv + 1];
+                const canAfford = next ? profile.vaultSilverWan >= next.costWan : false;
+
+                return (
+                  <div
+                    key={key}
+                    className="rounded-xl bg-stone-950/90 border border-stone-800 p-3.5 flex flex-col justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm font-extrabold text-amber-200">{title}</span>
+                        <span className="text-[11px] font-mono px-2 py-0.5 rounded bg-amber-500/15 text-amber-300">
+                          Lv.{lv}/{tiers.length - 1}
+                        </span>
+                      </div>
+                      <div className="text-xs text-stone-300 mt-1.5">{tiers[lv].label}</div>
+                      {next && (
+                        <div className="text-[11px] text-emerald-300/90 mt-1">
+                          下一级：{next.label}
+                        </div>
+                      )}
+                    </div>
+
+                    {maxed ? (
+                      <div className="py-2 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-center text-xs font-bold text-emerald-300">
+                        ✨ 已升至满级宗师神装
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleBuyUpgrade(key)}
+                        disabled={!canAfford}
+                        className={`w-full py-2 px-3 rounded-lg text-xs font-extrabold transition cursor-pointer ${
+                          canAfford
+                            ? 'bg-amber-500 hover:bg-amber-400 text-black shadow'
+                            : 'bg-stone-900 text-stone-500 border border-stone-800 cursor-not-allowed'
+                        }`}
+                      >
+                        消耗 {formatSilver(next!.costWan)} 立即升级
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ==================== MODAL: MUSEUM ANTIQUE TREASURE CODEX ==================== */}
+      {codexOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-2xl rounded-2xl wood-panel gold-border-glow p-5 space-y-4 max-h-[88dvh] overflow-y-auto">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-rose-300 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-rose-400" />
+                <span>王府秘库 · 十二大传世古玩图鉴</span>
+              </h3>
+              <button
+                onClick={() => setCodexOpen(false)}
+                className="p-1.5 rounded-lg bg-stone-900 text-stone-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+              {ALL_TREASURE_IDS.map((id) => {
+                const t = TREASURES[id];
+                const meta = RARITY_META[t.rarity];
+                return (
+                  <div
+                    key={id}
+                    className="rounded-xl p-2.5 border flex items-center gap-2.5"
+                    style={{ background: meta.bg, borderColor: meta.border }}
+                  >
+                    <AntiqueBadge defId={id} size={44} />
+                    <div className="min-w-0">
+                      <div className="text-xs font-extrabold text-white truncate">{t.name}</div>
+                      <div className="text-[10px] font-mono text-amber-200">
+                        {formatSilver(t.valueWan)}
+                      </div>
+                      <div className="text-[10px] text-stone-200/80">
+                        {meta.label} · {t.gridW}×{t.gridH}格 · {t.weightKg}kg
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ==================== MODAL: CROSS-DEVICE SAVE TRANSFER (RHSAVE2.) ==================== */}
@@ -742,7 +862,6 @@ export const App: React.FC = () => {
               </button>
             </div>
 
-            {/* 3 God-Mode Switches (Interactive immediately once unlocked!) */}
             <div className="space-y-2">
               {(
                 [
@@ -750,7 +869,7 @@ export const App: React.FC = () => {
                     key: 'xrayMythicVision',
                     icon: Eye,
                     title: '👁️ 透视大红天眼',
-                    desc: '隔墙直接看穿全图所有木箱/龙柜里的宝物真名与红光，直奔传国玉玺不走冤枉路！',
+                    desc: '隔墙直接亮起传世大红与大金冲天光柱，直奔传国玉玺不走冤枉路！',
                   },
                   {
                     key: 'featherWeight',
