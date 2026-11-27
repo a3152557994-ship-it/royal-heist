@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "build:pure": "VITE_PURE_MODE=1 tsc -b && VITE_PURE_MODE=1 vite build --outDir dist-pure",
-    "test": "/Users/wang/.bun/bin/bun tests/engine.test.ts",
+    "test": "/Users/wang/.bun/bin/bun --define __PURE_MODE__=false tests/engine.test.ts",
     "preview": "vite preview"
   },
   "dependencies": {

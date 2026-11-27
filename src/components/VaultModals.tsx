@@ -68,8 +68,8 @@ export const VaultModals: React.FC<VaultModalsProps> = ({
     setTimeout(() => setCopiedSave(false), 2500);
   };
 
-  const handleImportSave = () => {
-    const res = importSaveTransferCode(importInput);
+  const handleImportSave = async () => {
+    const res = await importSaveTransferCode(importInput);
     if (res.ok && res.profile) {
       sound.playCashOutGong();
       onRestoreProfile(res.profile);

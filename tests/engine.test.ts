@@ -56,18 +56,24 @@ async function runTests() {
   const eunuchBribe = evaluateImperialExcuse('给公公马车上备了三成白银干股孝敬', 'eunuch');
   assert.equal(eunuchBribe.dismissedAll, true, 'Greedy Eunuch should accept profit share');
 
-  console.log('4. Testing cross-device save transfer checksum integrity...');
+  console.log('4. Testing cross-device save transfer checksum & Ed25519 anti-spoof integrity...');
   const prof = createDefaultProfile();
   prof.vaultSilverWan = 3880.5;
   prof.estateLevel = 3;
   const code = exportSaveTransferCode(prof);
-  const restored = importSaveTransferCode(code);
+  const restored = await importSaveTransferCode(code);
   assert.equal(restored.ok, true);
   assert.equal(restored.profile?.vaultSilverWan, 3880.5);
   assert.equal(restored.profile?.estateLevel, 3);
 
-  const tamperedSave = importSaveTransferCode(code.slice(0, -2) + 'ZZ');
+  const tamperedSave = await importSaveTransferCode(code.slice(0, -2) + 'ZZ');
   assert.equal(tamperedSave.ok, false, 'Tampered save code must be rejected');
+
+  const spoofProf = createDefaultProfile();
+  spoofProf.proLicenseToken = 'OPC1.fake.forged';
+  const spoofSave = exportSaveTransferCode(spoofProf);
+  const spoofRes = await importSaveTransferCode(spoofSave);
+  assert.equal(spoofRes.ok, false, 'Save containing forged proLicenseToken must be rejected!');
 
   console.log('5. Testing real Ed25519 OPC1. cryptographic license verification...');
   const realToken = execFileSync(

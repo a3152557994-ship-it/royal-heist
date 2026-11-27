@@ -8,9 +8,7 @@ import { PersistentProfile } from '../types/game';
 export const PUBLIC_SPKI_BASE64 = 'MCowBQYDK2VwAyEAP5NCVP7CT0tgaGLSGMe4r87SjYRWTM6gN6igBZYSXys=';
 export const PRODUCT_SLUG = 'royal-heist';
 
-export const IS_PURE_PLATFORM_MODE: boolean =
-  typeof import.meta !== 'undefined' &&
-  Boolean((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_PURE_MODE === '1');
+export const IS_PURE_PLATFORM_MODE: boolean = __PURE_MODE__;
 
 const STORAGE_PRIMARY = 'royal_heist_profile_v1';
 const STORAGE_BACKUP = 'royal_heist_profile_backup_v1';
@@ -170,7 +168,9 @@ export function exportSaveTransferCode(profile: PersistentProfile): string {
   return `RHSAVE1.${sum}.${b64}`;
 }
 
-export function importSaveTransferCode(code: string): { ok: boolean; profile?: PersistentProfile; error?: string } {
+export async function importSaveTransferCode(
+  code: string
+): Promise<{ ok: boolean; profile?: PersistentProfile; error?: string }> {
   const clean = code.trim();
   const parts = clean.split('.');
   if (parts.length !== 3 || parts[0] !== 'RHSAVE1') {
@@ -185,6 +185,13 @@ export function importSaveTransferCode(code: string): { ok: boolean; profile?: P
     const parsed = JSON.parse(new TextDecoder().decode(bytes)) as PersistentProfile;
     if (typeof parsed.vaultSilverWan !== 'number') {
       return { ok: false, error: '存档数据结构无效' };
+    }
+    // Strictly re-verify Ed25519 signature if proLicenseToken is present to block save-forging bypass!
+    if (parsed.proLicenseToken) {
+      const licCheck = await verifyOpcLicenseToken(parsed.proLicenseToken);
+      if (!licCheck.valid) {
+        return { ok: false, error: '存档内附带的授权码未通过 Ed25519 防伪验签，拒绝导入伪造特权' };
+      }
     }
     return { ok: true, profile: { ...createDefaultProfile(), ...parsed } };
   } catch {

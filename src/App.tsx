@@ -39,7 +39,12 @@ import {
   RELICS_AND_CONSORTS,
   tText,
 } from './engine/gameData';
-import { loadProfile, saveProfile, IS_PURE_PLATFORM_MODE } from './utils/licenseAndSave';
+import {
+  loadProfile,
+  saveProfile,
+  IS_PURE_PLATFORM_MODE,
+  verifyOpcLicenseToken,
+} from './utils/licenseAndSave';
 import { renderBattlePosterDataUrl } from './utils/posterRenderer';
 import { sound } from './audio/soundEngine';
 import { AuditModal } from './components/AuditModal';
@@ -96,6 +101,17 @@ export const App: React.FC = () => {
     setProfile(next);
     saveProfile(next);
   };
+
+  useEffect(() => {
+    if (profile.proLicenseToken) {
+      verifyOpcLicenseToken(profile.proLicenseToken).then((chk) => {
+        if (!chk.valid) {
+          syncProfile({ ...profile, proLicenseToken: null, proActivatedAt: null });
+        }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const danger = Math.max((100 - incenseLeft) / 100, wantedStars / 5);
@@ -237,6 +253,7 @@ export const App: React.FC = () => {
         nextItems[k] = (nextItems[k] || 0) + 1;
       });
 
+      const nextHistory = [...historyTitles, ...chosen.map((c) => tText(c.name, lang))];
       const nextPeak = Math.max(peakWanted, res.nextWanted);
       setUnbankedSilverWan(nextSilver);
       setRelicIds(nextRelics);
@@ -244,7 +261,19 @@ export const App: React.FC = () => {
       setWantedStars(res.nextWanted);
       setPeakWanted(nextPeak);
       setIncenseLeft(res.nextIncense);
-      setHistoryTitles((prev) => [...prev, ...chosen.map((c) => tText(c.name, lang))]);
+      setHistoryTitles(nextHistory);
+
+      // Update dock snapshot AFTER adding this watch's silver so Rewind Pill always rescues full stash!
+      setLastSafeSnapshot({
+        watchTurn,
+        incenseLeft: Math.max(20, res.nextIncense),
+        wantedStars: res.nextWanted,
+        unbankedSilverWan: nextSilver,
+        greedStreakMult,
+        relicIds: nextRelics,
+        items: nextItems,
+        historyTitles: nextHistory,
+      });
 
       // Check if Incense burned out right now!
       if (res.nextIncense <= 0) {
@@ -550,17 +579,22 @@ export const App: React.FC = () => {
   const handleUseRewindPill = () => {
     if (!lastSafeSnapshot) return;
     if (!isPro && profile.freeRewindPills <= 0) {
+      if (IS_PURE_PLATFORM_MODE) {
+        if (!shareBonusClaimedThisRun) handleDownloadOrSharePoster();
+        return;
+      }
       setVaultTab('pro');
       setVaultModalOpen(true);
       return;
     }
     sound.playCashOutGong();
-    if (!isPro) {
-      syncProfile({
-        ...profile,
-        freeRewindPills: Math.max(0, profile.freeRewindPills - 1),
-      });
-    }
+    // Roll back any 20% confiscation consolation silver already credited so it cannot be duplicated
+    const rollbackRescued = outcome && !outcome.escaped ? outcome.silverExtractedWan : 0;
+    syncProfile({
+      ...profile,
+      vaultSilverWan: Math.max(0, Math.round((profile.vaultSilverWan - rollbackRescued) * 10) / 10),
+      freeRewindPills: isPro ? profile.freeRewindPills : Math.max(0, profile.freeRewindPills - 1),
+    });
     setWatchTurn(lastSafeSnapshot.watchTurn);
     setIncenseLeft(Math.max(18, lastSafeSnapshot.incenseLeft));
     setWantedStars(Math.max(0, lastSafeSnapshot.wantedStars - 1));
@@ -1207,13 +1241,18 @@ export const App: React.FC = () => {
                   </span>
                 </div>
                 <button
+                  disabled={IS_PURE_PLATFORM_MODE && profile.freeRewindPills <= 0 && shareBonusClaimedThisRun}
                   onClick={handleUseRewindPill}
-                  className="w-full py-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                  className="w-full py-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 disabled:opacity-45 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <RotateCcw className="w-4 h-4" />
                   <span>
                     {isPro || profile.freeRewindPills > 0
                       ? `立即时光回溯 · 抢回 ${formatSilver(outcome.silverConfiscatedWan, lang)} 安全登船！`
+                      : IS_PURE_PLATFORM_MODE
+                      ? shareBonusClaimedThisRun
+                        ? '本局免费金蝉丸已用尽'
+                        : '点此保存战报 · 免费领 1 颗金蝉丸立即回溯！'
                       : '解锁大内总管金手指 · 无限时光回溯悔棋'}
                   </span>
                 </button>

@@ -4,6 +4,9 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   base: './',
+  define: {
+    __PURE_MODE__: JSON.stringify(process.env.VITE_PURE_MODE === '1'),
+  },
   plugins: [react(), tailwindcss()],
   build: {
     outDir: 'dist',
