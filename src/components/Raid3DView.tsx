@@ -127,11 +127,6 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
     sceneRef.current?.syncProfile(profile, isPro);
   }, [profile, isPro]);
 
-  // Unified pause authority (First-Time Guide, Backpack, Revive Modal, OR Header Save/Pro Modals!)
-  useEffect(() => {
-    sceneRef.current?.setPaused(guideOpen || bagOpen || Boolean(reviveModalReason) || externalPaused);
-  }, [guideOpen, bagOpen, reviveModalReason, externalPaused]);
-
   // Mount Three.js 3D Stealth Engine
   useEffect(() => {
     const el = mountRef.current;
@@ -174,6 +169,8 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
       },
     });
     sceneRef.current = engine;
+    // Immediately freeze simulation if guide or any modal is open on initial mount!
+    engine.setPaused(guideOpen || bagOpen || Boolean(reviveModalReason) || externalPaused);
     if (minimapRef.current) {
       engine.setMinimapCanvas(minimapRef.current);
     }
@@ -186,6 +183,11 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapId]);
+
+  // Unified pause authority (runs AFTER mount effect so sceneRef.current is always ready!)
+  useEffect(() => {
+    sceneRef.current?.setPaused(guideOpen || bagOpen || Boolean(reviveModalReason) || externalPaused);
+  }, [mapId, guideOpen, bagOpen, reviveModalReason, externalPaused]);
 
   // Toggle Bag Hotkey ('b' / 'Escape')
   useEffect(() => {
