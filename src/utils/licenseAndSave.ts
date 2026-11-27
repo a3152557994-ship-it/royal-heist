@@ -41,6 +41,9 @@ export interface LicenseVerifyResult {
 }
 
 export async function verifyOpcLicenseToken(token: string): Promise<LicenseVerifyResult> {
+  if (IS_PURE_PLATFORM_MODE) {
+    return { valid: false };
+  }
   if (!token || typeof token !== 'string') {
     return { valid: false, reason: 'EMPTY' };
   }

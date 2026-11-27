@@ -1,81 +1,176 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import {
-  calculateWatchResolution,
-  computeSuddenDeathRiskPercent,
-  createAuditEncounter,
-  DECK_POOL,
-  drawHandCards,
-  evaluateImperialExcuse,
-  LORDS,
-} from '../src/engine/gameData.ts';
+  canPlaceInBag,
+  computeBagTotals,
+  findAutoFitSlot,
+  getBagDimensions,
+  rollTreasureForChest,
+  TREASURES,
+} from '../src/engine/lootCatalog.ts';
 import {
-  createDefaultProfile,
-  exportSaveTransferCode,
-  importSaveTransferCode,
+  castVisionRay,
+  hasLineOfSight,
+  RAID_MAPS,
+  resolveCircleWalls,
+} from '../src/engine/raidMaps.ts';
+import {
+  createDefaultRaider,
+  exportRaiderSaveCode,
+  importRaiderSaveCode,
   verifyOpcLicenseToken,
-} from '../src/utils/licenseAndSave.ts';
+} from '../src/utils/raiderSave.ts';
+import type { BagItem, RectWall } from '../src/types/raid.ts';
 
 async function runTests() {
-  console.log('1. Testing opening protection & sudden death curve...');
-  assert.equal(computeSuddenDeathRiskPercent(100, 1), 0, 'Turn 1 full incense must have 0% cheap RNG death');
-  assert.equal(computeSuddenDeathRiskPercent(0, 3), 100, '0% incense must be 100% death');
-  assert.ok(computeSuddenDeathRiskPercent(25, 5) > 45, 'Low incense should carry high risk');
+  console.log('1. Testing Spatial Tetris Backpack placement, rotation & encumbrance math...');
+  const dims0 = getBagDimensions(0, false);
+  assert.deepEqual(dims0, { cols: 4, rows: 4 }, 'Lv.0 bag must be 4x4');
+  const dimsGod = getBagDimensions(0, true);
+  assert.deepEqual(dimsGod, { cols: 6, rows: 5 }, 'God-mode bag must expand to 6x5');
 
-  console.log('2. Testing Balatro-style abacus synergy & consort multiplier math...');
-  const duke = LORDS.find((l) => l.id === 'duke')!;
-  const saltCard = DECK_POOL.find((c) => c.id === 'c_salt_ticket')!;
-  const wildCard = DECK_POOL.find((c) => c.id === 'w_boil_inlaw')!;
-  const coverCard = DECK_POOL.find((c) => c.id === 's_ginseng')!;
+  const bag: BagItem[] = [
+    { uid: 'u1', defId: 'imperial_seal', gx: 0, gy: 0, rotated: false }, // 2x2 at (0,0)
+  ];
+  assert.equal(
+    canPlaceInBag(bag, 4, 4, { defId: 'gold_abacus', gx: 1, gy: 1, rotated: false }),
+    false,
+    'Overlapping 2x2 seal must be rejected'
+  );
+  assert.equal(
+    canPlaceInBag(bag, 4, 4, { defId: 'gold_abacus', gx: 2, gy: 0, rotated: false }),
+    true,
+    '2x1 gold abacus should fit cleanly at (2,0)'
+  );
 
-  const res = calculateWatchResolution({
-    selectedCards: [saltCard, wildCard, coverCard],
-    lord: duke,
-    relicIds: ['rel_duke_harmony', 'con_princess', 'con_dancer'],
-    greedStreakMult: 0.55,
-    currentIncense: 80,
-    currentWanted: 2.0,
-    estateLevel: 2,
-    lang: 'zh',
-  });
-  assert.ok(res.gainedSilverWan > 500, `Expected explosive combo > 500 wan, got ${res.gainedSilverWan}`);
-  assert.ok(res.steps.length >= 5, 'Should log card + consort synergy steps');
+  // Test 90-degree auto-rotation fit: leave only a 1x3 vertical column at x=3 in a 4x4 grid
+  const almostFullBag: BagItem[] = [
+    { uid: 'a1', defId: 'gold_buddha', gx: 0, gy: 0, rotated: false }, // 2x3 at x=0..1, y=0..2
+    { uid: 'a2', defId: 'porcelain_vase', gx: 2, gy: 0, rotated: false }, // 1x2 at x=2, y=0..1
+    { uid: 'a3', defId: 'jade_ruyi', gx: 0, gy: 3, rotated: false }, // 2x1 at x=0..1, y=3
+    { uid: 'a4', defId: 'jade_ruyi', gx: 2, gy: 3, rotated: false }, // 2x1 at x=2..3, y=3
+    { uid: 'a5', defId: 'silver_ingot', gx: 2, gy: 2, rotated: false }, // 1x1 at x=2, y=2
+  ];
+  // jade_ruyi is 2x1 by default, so it CANNOT fit horizontally anywhere, MUST auto-rotate to 1x2 at x=3, y=0!
+  const rotFit = findAutoFitSlot(almostFullBag, 4, 4, 'jade_ruyi');
+  assert.ok(rotFit !== null, 'Auto-fit must find rotated 1x2 slot in remaining column x=3');
+  assert.equal(rotFit!.gx, 3);
+  assert.equal(rotFit!.rotated, true, '2x1 item must be rotated 90 degrees to fit vertical slot');
 
-  console.log('3. Testing Buckshot-Roulette Audit encounter & deterministic rhetorical combat...');
-  const enc = createAuditEncounter(4.5, 4);
-  assert.equal(enc.scrolls.length, 3);
-  assert.equal(enc.scrolls.filter((s) => s.isDeadly).length, 2, 'High wanted should spawn 2 deadly scrolls');
+  const totals = computeBagTotals(bag);
+  assert.equal(totals.totalValueWan, TREASURES.imperial_seal.valueWan);
+  assert.equal(totals.mythicCount, 1);
 
-  const censorBribe = evaluateImperialExcuse('给御史大人十万两黄金喝茶', 'censor');
-  assert.equal(censorBribe.dismissedAll, false, 'Iron Censor must reject blatant bribes');
-  assert.ok(censorBribe.wantedDelta > 0);
+  for (let i = 0; i < 30; i++) {
+    const rolled = rollTreasureForChest('dragon_vault', 2);
+    assert.ok(TREASURES[rolled], `Unknown rolled treasure: ${rolled}`);
+  }
 
-  const censorDuty = evaluateImperialExcuse('此乃暗中筹措的辽东前线军饷，皆为黎民百姓', 'censor');
-  assert.equal(censorDuty.dismissedAll, true, 'Iron Censor should be moved by frontier defense duty');
+  console.log('2. Testing 2D Stealth Maps, Wall Collision Sliding & Raycast Lantern LOS...');
+  for (const mapKey of Object.keys(RAID_MAPS) as Array<keyof typeof RAID_MAPS>) {
+    const m = RAID_MAPS[mapKey];
+    assert.ok(m.chests.length >= 8, `${mapKey} should have rich chest density`);
+    assert.ok(m.guards.length >= 3, `${mapKey} should have active patrolling guards`);
+    assert.ok(m.walls.some((w) => w.kind === 'secret_wall'), `${mapKey} must have a pryable secret vault wall`);
 
-  const eunuchBribe = evaluateImperialExcuse('给公公马车上备了三成白银干股孝敬', 'eunuch');
-  assert.equal(eunuchBribe.dismissedAll, true, 'Greedy Eunuch should accept profit share');
+    // Regression check #1: Holding 'S' (walking straight south from spawn for 2 full seconds) must stop cleanly at dock!
+    let walkPos = { x: m.spawn.x, y: m.spawn.y };
+    for (let f = 0; f < 120; f++) {
+      walkPos = resolveCircleWalls({ x: walkPos.x, y: walkPos.y + 220 * (1 / 60) }, 16, m.walls);
+    }
+    assert.ok(
+      walkPos.y <= m.height - 50,
+      `${mapKey} south dock must block walking off bottom edge (got y=${walkPos.y}, height=${m.height})`
+    );
 
-  console.log('4. Testing cross-device save transfer checksum & Ed25519 anti-spoof integrity...');
-  const prof = createDefaultProfile();
-  prof.vaultSilverWan = 3880.5;
-  prof.estateLevel = 3;
-  const code = exportSaveTransferCode(prof);
-  const restored = await importSaveTransferCode(code);
+    // Regression check #2: Simulate 30s of every guard's patrol loop at 60fps to guarantee ZERO wall deadlocks!
+    for (let gi = 0; gi < m.guards.length; gi++) {
+      const gCfg = m.guards[gi];
+      let gx = gCfg.waypoints[0].x;
+      let gy = gCfg.waypoints[0].y;
+      let wpIdx = 1 % gCfg.waypoints.length;
+      let waypointTransitions = 0;
+      const dt = 1 / 60;
+      for (let step = 0; step < 60 * 30; step++) {
+        const tgt = gCfg.waypoints[wpIdx];
+        const dx = tgt.x - gx;
+        const dy = tgt.y - gy;
+        const dist = Math.hypot(dx, dy);
+        if (dist > 8) {
+          const moved = resolveCircleWalls(
+            { x: gx + (dx / dist) * gCfg.speed * dt, y: gy + (dy / dist) * gCfg.speed * dt },
+            17,
+            m.walls
+          );
+          gx = moved.x;
+          gy = moved.y;
+        } else {
+          wpIdx = (wpIdx + 1) % gCfg.waypoints.length;
+          waypointTransitions += 1;
+        }
+      }
+      assert.ok(
+        waypointTransitions >= 2,
+        `${mapKey} guard #${gi} got stuck on a wall (only ${waypointTransitions} waypoint transitions in 30s)`
+      );
+    }
+  }
+
+  const testWalls: RectWall[] = [
+    { id: 'screen1', x: 100, y: 80, w: 40, h: 120, kind: 'screen' },
+    { id: 'canal', x: 300, y: 80, w: 60, h: 120, kind: 'water' },
+  ];
+  // Circle collision pushes player out of solid screen
+  const pushed = resolveCircleWalls({ x: 92, y: 120 }, 16, testWalls);
+  assert.ok(pushed.x <= 84.01, `Player circle should be pushed left of wall x=100, got ${pushed.x}`);
+
+  // Screen blocks guard LOS; water does NOT block guard LOS!
+  assert.equal(
+    hasLineOfSight({ x: 50, y: 120 }, { x: 200, y: 120 }, testWalls),
+    false,
+    'Carved screen must block guard lantern Line-of-Sight'
+  );
+  assert.equal(
+    hasLineOfSight({ x: 260, y: 120 }, { x: 400, y: 120 }, testWalls),
+    true,
+    'Water canal must NOT block Line-of-Sight'
+  );
+
+  // Broken secret wall stops blocking LOS & movement
+  const secretWall: RectWall[] = [
+    { id: 'sec', x: 100, y: 80, w: 40, h: 40, kind: 'secret_wall', broken: true },
+  ];
+  assert.equal(
+    hasLineOfSight({ x: 50, y: 100 }, { x: 200, y: 100 }, secretWall),
+    true,
+    'Pried-open secret wall must allow passage and sight'
+  );
+
+  const clippedHit = castVisionRay({ x: 50, y: 120 }, 0, 250, testWalls);
+  assert.ok(clippedHit.x < 145, `Vision ray must clip against screen at x=100..140, got ${clippedHit.x}`);
+
+  console.log('3. Testing RHSAVE2. Cross-Device Save Checksum & Anti-Forged-Pro Guard...');
+  const raider = createDefaultRaider();
+  raider.vaultSilverWan = 6880;
+  raider.upgrades.bagLevel = 2;
+  const saveCode = exportRaiderSaveCode(raider);
+  assert.ok(saveCode.startsWith('RHSAVE2.'), 'v2 save code must use RHSAVE2. prefix');
+
+  const restored = await importRaiderSaveCode(saveCode);
   assert.equal(restored.ok, true);
-  assert.equal(restored.profile?.vaultSilverWan, 3880.5);
-  assert.equal(restored.profile?.estateLevel, 3);
+  assert.equal(restored.profile?.vaultSilverWan, 6880);
+  assert.equal(restored.profile?.upgrades.bagLevel, 2);
 
-  const tamperedSave = await importSaveTransferCode(code.slice(0, -2) + 'ZZ');
-  assert.equal(tamperedSave.ok, false, 'Tampered save code must be rejected');
+  const tampered = await importRaiderSaveCode(saveCode.slice(0, -2) + 'ZZ');
+  assert.equal(tampered.ok, false, 'Tampered RHSAVE2 checksum must be rejected');
 
-  const spoofProf = createDefaultProfile();
-  spoofProf.proLicenseToken = 'OPC1.fake.forged';
-  const spoofSave = exportSaveTransferCode(spoofProf);
-  const spoofRes = await importSaveTransferCode(spoofSave);
-  assert.equal(spoofRes.ok, false, 'Save containing forged proLicenseToken must be rejected!');
+  const spoofRaider = createDefaultRaider();
+  spoofRaider.proLicenseToken = 'OPC1.forged.signature';
+  const spoofCode = exportRaiderSaveCode(spoofRaider);
+  const spoofCheck = await importRaiderSaveCode(spoofCode);
+  assert.equal(spoofCheck.ok, false, 'RHSAVE2 containing forged proLicenseToken must be rejected');
 
-  console.log('5. Testing real Ed25519 OPC1. cryptographic license verification...');
+  console.log('4. Testing Real Ed25519 OPC1. License Minting & Verification...');
   const realToken = execFileSync(
     'node',
     [
@@ -83,37 +178,36 @@ async function runTests() {
       '--product',
       'royal-heist',
       '--email',
-      'test@royalheist.local',
+      'raider@royalheist.local',
     ],
     { encoding: 'utf8' }
   ).trim();
 
-  const validCheck = await verifyOpcLicenseToken(realToken);
-  assert.equal(validCheck.valid, true, `Valid Ed25519 token should pass: ${JSON.stringify(validCheck)}`);
+  const validRes = await verifyOpcLicenseToken(realToken);
+  assert.equal(validRes.valid, true, 'Authentic Ed25519 royal-heist token must pass');
 
-  const wrongProdToken = execFileSync(
+  // Save code WITH a genuine Ed25519 token MUST restore cleanly!
+  const genuineProRaider = createDefaultRaider();
+  genuineProRaider.proLicenseToken = realToken;
+  const genuineProSave = exportRaiderSaveCode(genuineProRaider);
+  const genuineRestore = await importRaiderSaveCode(genuineProSave);
+  assert.equal(genuineRestore.ok, true, 'RHSAVE2 with authentic Ed25519 token must restore cleanly');
+
+  const wrongProductToken = execFileSync(
     'node',
     [
       '/Users/wang/OPC/projects/ai-20-matrix/bin/issue-license.mjs',
       '--product',
-      'other-app',
+      'other-game',
       '--email',
-      'test@royalheist.local',
+      'raider@royalheist.local',
     ],
     { encoding: 'utf8' }
   ).trim();
-  const wrongCheck = await verifyOpcLicenseToken(wrongProdToken);
-  assert.equal(wrongCheck.valid, false, 'Token for another product must be rejected');
+  assert.equal((await verifyOpcLicenseToken(wrongProductToken)).valid, false);
+  assert.equal((await verifyOpcLicenseToken(realToken.slice(0, -4) + 'AAAA')).valid, false);
 
-  const forgedToken = realToken.slice(0, -4) + 'AAAA';
-  const forgedCheck = await verifyOpcLicenseToken(forgedToken);
-  assert.equal(forgedCheck.valid, false, 'Forged signature must be rejected');
-
-  // Ensure hand draw respects relic slot caps
-  const drawn = drawHandCards(['rel_duke_harmony', 'con_princess', 'con_dancer', 'con_assassin', 'con_merchant'], 5, 5);
-  assert.equal(drawn.some((c) => Boolean(c.grantsRelicId)), false, 'Full relic slots should not draw duplicate relic cards');
-
-  console.log('✅ ALL 11/11 ENGINE, MATH, SAVE & ED25519 LICENSE TESTS PASSED!');
+  console.log('✅ ALL v2.0 STEALTH ENGINE, TETRIS BAG, RAYCAST LOS, RHSAVE2 & ED25519 TESTS PASSED!');
 }
 
 runTests().catch((err) => {

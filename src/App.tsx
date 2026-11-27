@@ -1,1368 +1,847 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import confetti from 'canvas-confetti';
 import {
+  Crown,
+  Download,
+  Eye,
+  Feather,
   Flame,
+  HardDriveDownload,
+  Infinity as InfinityIcon,
+  KeyRound,
+  Package,
+  RotateCcw,
   Sailboat,
+  Shield,
+  Sparkles,
+  Swords,
   Volume2,
   VolumeX,
-  Crown,
-  Dices,
-  Video,
-  Share2,
-  RotateCcw,
-  Sparkles,
-  Building2,
-  Languages,
-  AlertTriangle,
-  ShieldCheck,
+  Wrench,
+  X,
+  Zap,
 } from 'lucide-react';
+import { MapId, RaiderProfile, RaidSummary } from './types/raid';
+import { RAID_MAPS } from './engine/raidMaps';
+import { drawTreasureIcon, RARITY_META, TREASURES } from './engine/lootCatalog';
+import { formatSilver } from './engine/gameData';
 import {
-  AuditEncounter,
-  CheatItemId,
-  ComboStepLog,
-  Lang,
-  LootCard,
-  LordProfile,
-  PersistentProfile,
-  RunOutcome,
-  RunSnapshot,
-} from './types/game';
-import {
-  calculateWatchResolution,
-  computeSuddenDeathRiskPercent,
-  createAuditEncounter,
-  drawHandCards,
-  ESTATES,
-  evaluateImperialExcuse,
-  formatSilver,
-  LORDS,
-  RELICS_AND_CONSORTS,
-  tText,
-} from './engine/gameData';
-import {
-  loadProfile,
-  saveProfile,
+  exportRaiderSaveCode,
+  importRaiderSaveCode,
   IS_PURE_PLATFORM_MODE,
+  loadRaiderProfile,
+  saveRaiderProfile,
+  UPGRADE_TIERS,
   verifyOpcLicenseToken,
-} from './utils/licenseAndSave';
-import { renderBattlePosterDataUrl } from './utils/posterRenderer';
+} from './utils/raiderSave';
+import { RaidActionView } from './components/RaidActionView';
+import { renderRaidLootPoster } from './utils/raidPoster';
 import { sound } from './audio/soundEngine';
-import { AuditModal } from './components/AuditModal';
-import { VaultModals } from './components/VaultModals';
 
-type ScreenPhase = 'lobby' | 'desk' | 'outcome';
-type DeskSubPhase = 'picking' | 'resolving' | 'cashout_prompt';
+const MAP_ART: Record<MapId, { img: string; badge: string; accent: string }> = {
+  salt_office: {
+    img: './assets/char_duke.webp',
+    badge: '新手爽摸 · 8箱珍宝',
+    accent: 'border-sky-500/50',
+  },
+  heshen_manor: {
+    img: './assets/char_heshen.webp',
+    badge: '🔥 王牌爆红 · 锡晋斋夹墙',
+    accent: 'border-amber-400/80 ring-1 ring-amber-400/40',
+  },
+  forbidden_vault: {
+    img: './assets/char_emperor.webp',
+    badge: '🐉 炼狱皇库 · 满地传国玺',
+    accent: 'border-rose-500/60',
+  },
+};
+
+const SHOWCASE_TREASURE_IDS = [
+  'imperial_seal',
+  'gold_buddha',
+  'phoenix_crown',
+  'emerald_cabbage',
+  'dragon_cup',
+  'gold_abacus',
+];
+
+const CanvasTreasureBadge: React.FC<{ defId: string; size?: number }> = ({ defId, size = 44 }) => {
+  const ref = useRef<HTMLCanvasElement | null>(null);
+  useEffect(() => {
+    const cvs = ref.current;
+    if (!cvs) return;
+    const ctx = cvs.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, size, size);
+    const def = TREASURES[defId];
+    if (def) drawTreasureIcon(ctx, def.iconType, size / 2, size / 2, size * 0.84);
+  }, [defId, size]);
+  return <canvas ref={ref} width={size} height={size} className="shrink-0" />;
+};
 
 export const App: React.FC = () => {
-  const [lang, setLang] = useState<Lang>('zh');
-  const [profile, setProfile] = useState<PersistentProfile>(() => loadProfile());
-  const [phase, setPhase] = useState<ScreenPhase>('lobby');
-  const [subPhase, setSubPhase] = useState<DeskSubPhase>('picking');
-
-  const [selectedLord, setSelectedLord] = useState<LordProfile>(LORDS[0]);
-  const [streamerMode, setStreamerMode] = useState(false);
-  const [muted, setMuted] = useState(false);
-
-  // Active Run State
-  const [watchTurn, setWatchTurn] = useState(1);
-  const [incenseLeft, setIncenseLeft] = useState(100);
-  const [wantedStars, setWantedStars] = useState(1);
-  const [peakWanted, setPeakWanted] = useState(1);
-  const [unbankedSilverWan, setUnbankedSilverWan] = useState(0);
-  const [greedStreakMult, setGreedStreakMult] = useState(0);
-  const [relicIds, setRelicIds] = useState<string[]>([]);
-  const [items, setItems] = useState<Record<CheatItemId, number>>({
-    spyglass: 1,
-    scapegoat: 0,
-    bribe_tea: 1,
-    loaded_dice: 1,
-  });
-  const [hand, setHand] = useState<LootCard[]>([]);
-  const [pickedIds, setPickedIds] = useState<string[]>([]);
-  const [comboLogs, setComboLogs] = useState<ComboStepLog[]>([]);
-  const [historyTitles, setHistoryTitles] = useState<string[]>([]);
-  const [lastSafeSnapshot, setLastSafeSnapshot] = useState<RunSnapshot | null>(null);
-
-  // Audit Roulette State
-  const [audit, setAudit] = useState<AuditEncounter | null>(null);
-  const [peekedScrollIdx, setPeekedScrollIdx] = useState<number | null>(null);
-  const [scapegoatArmed, setScapegoatArmed] = useState(false);
-
-  // Outcome & Modals
-  const [outcome, setOutcome] = useState<RunOutcome | null>(null);
+  const [profile, setProfile] = useState<RaiderProfile>(() => loadRaiderProfile());
+  const [view, setView] = useState<'lobby' | 'raid' | 'outcome'>('lobby');
+  const [activeMapId, setActiveMapId] = useState<MapId>('heshen_manor');
+  const [raidKey, setRaidKey] = useState(1);
+  const [lastSummary, setLastSummary] = useState<RaidSummary | null>(null);
   const [posterUrl, setPosterUrl] = useState<string | null>(null);
-  const [shareBonusClaimedThisRun, setShareBonusClaimedThisRun] = useState(false);
-  const [vaultModalOpen, setVaultModalOpen] = useState(false);
-  const [vaultTab, setVaultTab] = useState<'estates' | 'achievements' | 'pro'>('estates');
+  const [posterRewardClaimed, setPosterRewardClaimed] = useState(false);
 
-  const isPro = Boolean(profile.proLicenseToken);
+  const [muted, setMuted] = useState(false);
+  const [saveModalOpen, setSaveModalOpen] = useState(false);
+  const [proModalOpen, setProModalOpen] = useState(false);
 
-  const syncProfile = (next: PersistentProfile) => {
-    setProfile(next);
-    saveProfile(next);
-  };
+  const [saveInput, setSaveInput] = useState('');
+  const [saveFeedback, setSaveFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
+  const [licenseInput, setLicenseInput] = useState('');
+  const [licenseFeedback, setLicenseFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
+
+  const isPro = !IS_PURE_PLATFORM_MODE && Boolean(profile.proLicenseToken);
+
+  // Persist profile automatically
   useEffect(() => {
-    if (profile.proLicenseToken) {
-      verifyOpcLicenseToken(profile.proLicenseToken).then((chk) => {
-        if (!chk.valid) {
-          syncProfile({ ...profile, proLicenseToken: null, proActivatedAt: null });
-        }
-      });
-    }
+    saveRaiderProfile(profile);
+  }, [profile]);
+
+  // Strictly re-verify stored Ed25519 token on mount to prevent localStorage DevTools spoofing
+  useEffect(() => {
+    if (IS_PURE_PLATFORM_MODE || !profile.proLicenseToken) return;
+    let cancelled = false;
+    verifyOpcLicenseToken(profile.proLicenseToken).then((res) => {
+      if (cancelled) return;
+      if (!res.valid) {
+        setProfile((prev) => ({
+          ...prev,
+          proLicenseToken: null,
+          proActivatedAt: null,
+          godMode: {
+            xrayMythicVision: false,
+            featherWeight: false,
+            infiniteTools: false,
+          },
+        }));
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    const danger = Math.max((100 - incenseLeft) / 100, wantedStars / 5);
-    sound.setDangerLevel(danger);
-  }, [incenseLeft, wantedStars]);
-
-  const maxRelicSlots =
-    selectedLord.maxRelicSlots + (isPro && profile.godModeConfig.extraRelicSlot ? 1 : 0);
-
-  // Start a new heist run
-  const startHeistRun = (lord: LordProfile) => {
-    sound.playSealStamp();
-    sound.startVaultAmbience();
-
-    const startSilver =
-      (profile.estateLevel >= 4 ? 120 : profile.estateLevel >= 1 ? 25 : 0) +
-      (isPro && profile.godModeConfig.bonusStartSilverWan ? 300 : 0);
-    const startIncense = Math.round(
-      lord.startingIncense * (isPro && profile.godModeConfig.slowIncense ? 1.4 : 1)
-    );
-    const startItems: Record<CheatItemId, number> = {
-      ...lord.startingItems,
-      loaded_dice: lord.startingItems.loaded_dice + (profile.estateLevel >= 1 ? 1 : 0),
-      spyglass: lord.startingItems.spyglass + (isPro ? 1 : 0),
-    };
-    const initRelics = [lord.startingRelicId];
-    const maxSlots = lord.maxRelicSlots + (isPro && profile.godModeConfig.extraRelicSlot ? 1 : 0);
-
-    setSelectedLord(lord);
-    setWatchTurn(1);
-    setIncenseLeft(startIncense);
-    setWantedStars(lord.startingWanted);
-    setPeakWanted(lord.startingWanted);
-    setUnbankedSilverWan(startSilver);
-    setGreedStreakMult(0);
-    setRelicIds(initRelics);
-    setItems(startItems);
-    setHand(drawHandCards(initRelics, maxSlots, 5));
-    setPickedIds([]);
-    setComboLogs([]);
-    setHistoryTitles([]);
-    setLastSafeSnapshot(null);
-    setAudit(null);
-    setOutcome(null);
+  const startRaid = (mapId: MapId) => {
+    sound.playTap();
+    setActiveMapId(mapId);
+    setRaidKey((k) => k + 1);
     setPosterUrl(null);
-    setShareBonusClaimedThisRun(false);
-    setSubPhase('picking');
-    setPhase('desk');
-
-    syncProfile({
-      ...profile,
-      totalRuns: profile.totalRuns + 1,
-    });
+    setPosterRewardClaimed(false);
+    setView('raid');
   };
 
-  // Pre-execution risk & reward preview (Rule #6 from competitor teardown!)
-  const previewCalc = useMemo(() => {
-    const chosen = hand.filter((c) => pickedIds.includes(c.id));
-    if (chosen.length === 0) return null;
-    return calculateWatchResolution({
-      selectedCards: chosen,
-      lord: selectedLord,
-      relicIds,
-      greedStreakMult,
-      currentIncense: incenseLeft,
-      currentWanted: wantedStars,
-      estateLevel: profile.estateLevel,
-      lang,
+  const handleFinishRaid = (summary: RaidSummary) => {
+    setLastSummary(summary);
+    setProfile((prev) => {
+      const nextVault = summary.escaped
+        ? Math.round((prev.vaultSilverWan + summary.totalValueWan) * 10) / 10
+        : prev.vaultSilverWan;
+      return {
+        ...prev,
+        vaultSilverWan: nextVault,
+        totalRaids: prev.totalRaids + 1,
+        totalEscapes: prev.totalEscapes + (summary.escaped ? 1 : 0),
+        bestRaidWan: summary.escaped
+          ? Math.max(prev.bestRaidWan, summary.totalValueWan)
+          : prev.bestRaidWan,
+        mythicsFound: prev.mythicsFound + (summary.escaped ? summary.mythicCount : 0),
+      };
     });
-  }, [hand, pickedIds, selectedLord, relicIds, greedStreakMult, incenseLeft, wantedStars, profile.estateLevel, lang]);
+    setView('outcome');
 
-  const togglePickCard = (id: string) => {
-    sound.playTap();
-    setPickedIds((prev) => {
-      if (prev.includes(id)) return prev.filter((x) => x !== id);
-      if (prev.length >= 3) return prev;
-      return [...prev, id];
-    });
-  };
-
-  const handleRerollHand = () => {
-    if (items.loaded_dice <= 0) return;
-    sound.playTap();
-    setItems((p) => ({ ...p, loaded_dice: p.loaded_dice - 1 }));
-    setPickedIds([]);
-    setHand(drawHandCards(relicIds, maxRelicSlots, 5));
-  };
-
-  // Execute selected cards on the rosewood abacus!
-  const handleExecuteWatch = () => {
-    const chosen = hand.filter((c) => pickedIds.includes(c.id));
-    if (chosen.length === 0) return;
-
-    // Save pre-turn snapshot so Rewind Pill can rescue player cleanly!
-    const snapshot: RunSnapshot = {
-      watchTurn,
-      incenseLeft,
-      wantedStars,
-      unbankedSilverWan,
-      greedStreakMult,
-      relicIds: [...relicIds],
-      items: { ...items },
-      historyTitles: [...historyTitles],
-    };
-    setLastSafeSnapshot(snapshot);
-
-    const res = calculateWatchResolution({
-      selectedCards: chosen,
-      lord: selectedLord,
-      relicIds,
-      greedStreakMult,
-      currentIncense: incenseLeft,
-      currentWanted: wantedStars,
-      estateLevel: profile.estateLevel,
-      lang,
-    });
-
-    setSubPhase('resolving');
-    setComboLogs([]);
-
-    res.steps.forEach((step, idx) => {
-      window.setTimeout(() => {
-        sound.playAbacusCombo(idx + 1);
-        setComboLogs((prev) => [...prev, step]);
-      }, idx * 170);
-    });
-
-    const totalDelay = res.steps.length * 170 + 220;
-    window.setTimeout(() => {
-      let nextSilver = Math.round((unbankedSilverWan + res.gainedSilverWan) * 10) / 10;
-      const nextRelics = [...relicIds, ...res.grantedRelicIds].slice(0, maxRelicSlots);
-      if (nextRelics.includes('con_merchant')) {
-        nextSilver = Math.round(nextSilver * 1.15 * 10) / 10;
-      }
-
-      const nextItems = { ...items };
-      res.grantedItems.forEach((it) => {
-        const k = it as CheatItemId;
-        nextItems[k] = (nextItems[k] || 0) + 1;
+    if (summary.escaped) {
+      confetti({
+        particleCount: summary.mythicCount > 0 ? 110 : 65,
+        spread: 76,
+        origin: { y: 0.6 },
+        colors: ['#FBBF24', '#F43F5E', '#34D399', '#FEF08A'],
       });
-
-      const nextHistory = [...historyTitles, ...chosen.map((c) => tText(c.name, lang))];
-      const nextPeak = Math.max(peakWanted, res.nextWanted);
-      setUnbankedSilverWan(nextSilver);
-      setRelicIds(nextRelics);
-      setItems(nextItems);
-      setWantedStars(res.nextWanted);
-      setPeakWanted(nextPeak);
-      setIncenseLeft(res.nextIncense);
-      setHistoryTitles(nextHistory);
-
-      // Update dock snapshot AFTER adding this watch's silver so Rewind Pill always rescues full stash!
-      setLastSafeSnapshot({
-        watchTurn,
-        incenseLeft: Math.max(20, res.nextIncense),
-        wantedStars: res.nextWanted,
-        unbankedSilverWan: nextSilver,
-        greedStreakMult,
-        relicIds: nextRelics,
-        items: nextItems,
-        historyTitles: nextHistory,
-      });
-
-      // Check if Incense burned out right now!
-      if (res.nextIncense <= 0) {
-        triggerConfiscation(
-          nextSilver,
-          nextPeak,
-          nextRelics.length,
-          {
-            zh: '龙涎香断 · 新皇封门抄家',
-            en: 'Incense Burned Out · Total Confiscation',
-          },
-          {
-            zh: `乾清宫丧钟骤响！你贪恋最后一笔肥差未及登船，九门提督铁骑已将私邸围得水泄不通，暗格里 ${formatSilver(nextSilver, 'zh')} 尽数充入新皇内库！`,
-            en: `The mourning bell tolled before you boarded the boat! Imperial cavalry seized all ${formatSilver(nextSilver, 'en')} in your cellar!`,
-          },
-          {
-            zh: '「差评！就差半炷香我就能把三千万两运去苏州买园子了，结果太医院全是庸医，我跌倒新皇吃撑了！」',
-            en: '"1-Star! One more minute and my boat was in Suzhou! Now the new Emperor eats my entire fortune!"',
-          }
-        );
-        return;
-      }
-
-      // Check if Snap Audit triggers (Wanted >= 4.5 guaranteed, or probabilistic when Wanted >= 2.3)
-      const auditChance =
-        res.nextWanted >= 4.5 ? 1.0 : res.nextWanted >= 2.2 ? (res.nextWanted - 1.5) * 0.24 : 0;
-      if (Math.random() < auditChance) {
-        // Check Princess Ninghua whip immunity!
-        if (nextRelics.includes('con_princess') && Math.random() < 0.4) {
-          sound.playCashOutGong();
-          setComboLogs((prev) => [
-            ...prev,
-            {
-              label:
-                lang === 'zh'
-                  ? '👑 长公主凤鞭怒抽查账御史！免审过关！'
-                  : '👑 Princess Ninghua whipped away the Censor!',
-              silverWanAfter: nextSilver,
-              multAfter: 1,
-            },
-          ]);
-          setWantedStars(Math.max(0, res.nextWanted - 1.2));
-          setSubPhase('cashout_prompt');
-          return;
-        }
-
-        sound.playAuditAlarm();
-        setPeekedScrollIdx(null);
-        setScapegoatArmed(false);
-        setAudit(createAuditEncounter(res.nextWanted, watchTurn));
-        return;
-      }
-
-      setSubPhase('cashout_prompt');
-    }, totalDelay);
-  };
-
-  // Audit Roulette Handlers
-  const handleAuditPickScroll = (idx: number) => {
-    if (!audit) return;
-    const picked = audit.scrolls[idx];
-    if (picked.isDeadly) {
-      if (scapegoatArmed) {
-        sound.playCashOutGong();
-        setScapegoatArmed(false);
-        setWantedStars((w) => Math.max(0, w - 1.5));
-        setAudit(null);
-        setSubPhase('cashout_prompt');
-        return;
-      }
-      setAudit(null);
-      triggerConfiscation(
-        unbankedSilverWan,
-        peakWanted,
-        relicIds.length,
-        {
-          zh: '铁证穿帮 · 当堂革职抄没',
-          en: 'Deadly Ledger Unsealed · Arrested',
-        },
-        {
-          zh: `火漆拆开竟是江南盐引真账！钦差拍案亮出尚方锁链，你暗格里攒下的 ${formatSilver(unbankedSilverWan, 'zh')} 连夜被抬进国库！`,
-          en: `You unsealed the real salt-bribe ledger! Guards stormed your vault and confiscated ${formatSilver(unbankedSilverWan, 'en')}!`,
-        },
-        {
-          zh: '「服了！三选一都能精准摸中死罪真账，早知道刚才花点茶钱把东厂公公打发走了！」',
-          en: '"Unbelievable! Hit the 1-in-3 deadly ledger! Should have served the Pearl Bribe Tea!"',
-        }
-      );
-    } else {
-      // Survived audit! Bonus greed mult!
-      sound.playCashOutGong();
-      setGreedStreakMult((m) => Math.round((m + 0.45) * 100) / 100);
-      setWantedStars((w) => Math.max(0, Math.round((w - 1.1) * 10) / 10));
-      setAudit(null);
-      setSubPhase('cashout_prompt');
     }
   };
 
-  const handleAuditSpyglass = () => {
-    if (!audit) return;
-    if (!isPro) {
-      setItems((p) => ({ ...p, spyglass: Math.max(0, p.spyglass - 1) }));
-    }
-    const firstUnrevealed = audit.scrolls.findIndex((s) => !s.revealed);
-    if (firstUnrevealed >= 0) setPeekedScrollIdx(firstUnrevealed);
+  const handleConsumeRevivePill = (): boolean => {
+    if (isPro) return true;
+    if (profile.freeRevivePills <= 0) return false;
+    setProfile((prev) => ({
+      ...prev,
+      freeRevivePills: Math.max(0, prev.freeRevivePills - 1),
+    }));
+    return true;
   };
 
-  const handleAuditScapegoat = () => {
-    if (items.scapegoat <= 0) return;
-    setItems((p) => ({ ...p, scapegoat: p.scapegoat - 1 }));
-    setScapegoatArmed(true);
-  };
-
-  const handleAuditBribeTea = () => {
-    if (items.bribe_tea <= 0) return;
-    const cost = Math.max(5, Math.round(unbankedSilverWan * 0.18 * 10) / 10);
-    setItems((p) => ({ ...p, bribe_tea: p.bribe_tea - 1 }));
-    setUnbankedSilverWan((s) => Math.max(0, Math.round((s - cost) * 10) / 10));
-    setWantedStars((w) => Math.max(0, Math.round((w - 1.6) * 10) / 10));
-    sound.playCashOutGong();
-    setAudit(null);
-    setSubPhase('cashout_prompt');
-  };
-
-  const handleAuditExcuse = (text: string) => {
-    if (!audit) return;
-    const res = evaluateImperialExcuse(text, audit.inquisitorType);
-    const nextAch = [...profile.unlockedAchievements];
-    if (res.dismissedAll && !nextAch.includes('ach_ silver_tongue')) {
-      nextAch.push('ach_ silver_tongue');
-    }
-    syncProfile({
-      ...profile,
-      freeExcuseLeftToday: isPro ? profile.freeExcuseLeftToday : Math.max(0, profile.freeExcuseLeftToday - 1),
-      unlockedAchievements: nextAch,
-    });
-
-    setWantedStars((w) => Math.max(0, Math.min(5, Math.round((w + res.wantedDelta) * 10) / 10)));
-
-    if (res.dismissedAll) {
-      sound.playCashOutGong();
-      setAudit(null);
-      setSubPhase('cashout_prompt');
+  const handleBuyUpgrade = (track: keyof typeof UPGRADE_TIERS) => {
+    const curLv = profile.upgrades[track];
+    const tiers = UPGRADE_TIERS[track];
+    if (curLv >= tiers.length - 1) return;
+    const nextTier = tiers[curLv + 1];
+    if (profile.vaultSilverWan < nextTier.costWan) {
+      sound.playGuardAlert();
       return;
     }
-
-    const updatedScrolls = [...audit.scrolls];
-    if (res.neutralizedOneDeadly) {
-      const deadlyIdx = updatedScrolls.findIndex((s) => s.isDeadly && !s.revealed);
-      // Keep at least 1 safe scroll; neutralize deadly if >0
-      if (deadlyIdx >= 0) {
-        updatedScrolls[deadlyIdx] = { ...updatedScrolls[deadlyIdx], isDeadly: false };
-      }
-    }
-
-    setAudit({
-      ...audit,
-      scrolls: updatedScrolls,
-      excuseUsed: true,
-      excuseFeedback: { zh: res.verdictZh, en: res.verdictEn },
-    });
-  };
-
-  // Cash Out Safely! (Extraction Win!)
-  const handleCashOutEscape = () => {
-    sound.playCashOutGong();
-    confetti({ particleCount: 90, spread: 70, origin: { y: 0.6 } });
-
-    const newVault = Math.round((profile.vaultSilverWan + unbankedSilverWan) * 10) / 10;
-    const newBest = Math.max(profile.bestSingleRunWan, unbankedSilverWan);
-    const unlocked = new Set(profile.unlockedAchievements);
-
-    unlocked.add('ach_first_escape');
-    if (unbankedSilverWan >= 1000) unlocked.add('ach_10m');
-    if (unbankedSilverWan >= 10000) unlocked.add('ach_100m');
-    if (unbankedSilverWan >= 80000 || newVault >= 80000) unlocked.add('ach_800m_heshen');
-    const consortCount = relicIds.filter((id) => RELICS_AND_CONSORTS[id]?.kind === 'consort').length;
-    if (consortCount >= 3) unlocked.add('ach_harem_master');
-    if (incenseLeft < 15) unlocked.add('ach_edge_runner');
-
-    const nextProfile: PersistentProfile = {
-      ...profile,
-      vaultSilverWan: newVault,
-      totalEscapes: profile.totalEscapes + 1,
-      bestSingleRunWan: newBest,
-      unlockedAchievements: Array.from(unlocked),
-    };
-    syncProfile(nextProfile);
-
-    const pct = Math.min(99.8, Math.max(55, 58 + Math.log10(Math.max(10, unbankedSilverWan)) * 11.5));
-    const result: RunOutcome = {
-      escaped: true,
-      lordId: selectedLord.id,
-      watchesSurvived: watchTurn,
-      silverExtractedWan: unbankedSilverWan,
-      silverConfiscatedWan: 0,
-      peakWanted,
-      relicCount: relicIds.length,
-      causeTitle:
-        selectedLord.id === 'emperor'
-          ? { zh: '天子讨饷功成 · 京师固若金汤', en: 'War Chest Secured · Dynasty Saved' }
-          : unbankedSilverWan >= 10000
-          ? { zh: '富可敌国 · 携亿万白银逍遥南洋', en: ' Empire of Silver · Clean Getaway' }
-          : { zh: '见好就收 · 连夜装船全身而退', en: 'Clean Extraction · Safe in Jiangnan' },
-      epitaph:
-        selectedLord.id === 'emperor'
-          ? {
-              zh: `赶在闯军攻城前，你铁腕从满朝勋贵夹墙里抄出 ${formatSilver(unbankedSilverWan, 'zh')} 现银押上九门，边军死战退敌，大明国祚逆天改命！`,
-              en: `Before the walls fell, you pried ${formatSilver(unbankedSilverWan, 'en')} from corrupt nobles to fund the garrison and saved the dynasty!`,
-            }
-          : {
-              zh: `老皇上断气前半刻钟，你最后一箱金砖恰好划出护城河暗道！新皇冲进空荡荡的账房气得吐血，而你已在江南画舫听曲数银子！`,
-              en: `Minutes before the Old Emperor breathed his last, your loaded treasure barge slipped down the canal—leaving the New Emperor an empty cellar!`,
-            },
-      earthReviewMeme: {
-        zh: `「五星好评！这把稳如老狗果断撤离，净落袋 ${formatSilver(unbankedSilverWan, 'zh')}！奉劝各位贪狗一句：只要船划得够快，抄家圣旨就追不上我！」`,
-        en: `"5-Stars! Cashed out ${formatSilver(unbankedSilverWan, 'en')} right before the palace gates locked! Greed kills, timing pays!"`,
+    sound.playLootReveal('legendary');
+    setProfile((prev) => ({
+      ...prev,
+      vaultSilverWan: Math.round((prev.vaultSilverWan - nextTier.costWan) * 10) / 10,
+      upgrades: {
+        ...prev.upgrades,
+        [track]: curLv + 1,
       },
-      rankPercentile: pct,
-      canRewind: false,
-    };
-
-    setOutcome(result);
-    setPhase('outcome');
-    renderBattlePosterDataUrl(result, nextProfile, lang).then(setPosterUrl).catch(() => {});
+    }));
   };
 
-  // Push Luck! ("再贪下一更！")
-  const handlePushGreedNextWatch = () => {
-    sound.playTap();
-    const suddenDeathPct = computeSuddenDeathRiskPercent(incenseLeft, watchTurn);
-    if (Math.random() * 100 < suddenDeathPct) {
-      triggerConfiscation(
-        unbankedSilverWan,
-        peakWanted,
-        relicIds.length,
-        {
-          zh: '贪心晚撤一步 · 太上皇驾崩抄家',
-          en: 'One Turn Too Greedy · Emperor Died',
-        },
-        {
-          zh: `你执意再摸最后一更，不料子时刚过乾清宫白幡骤起！九门瞬间落锁，后门乌篷船被铁索截断，${formatSilver(unbankedSilverWan, 'zh')} 现银尽归新皇！`,
-          en: `You pushed for one more watch—and the Old Emperor died at midnight! Iron chains blocked the canal and all ${formatSilver(unbankedSilverWan, 'en')} was seized!`,
-        },
-        {
-          zh: `「退游差评！！明明已经揣了 ${formatSilver(unbankedSilverWan, 'zh')} 非要手贱再摸一把，你跌倒新皇吃饱，我真是个纯种大冤种！」`,
-          en: `"Rage quit!! Had ${formatSilver(unbankedSilverWan, 'en')} ready on the dock and got greedy for one more turn!"`,
-        }
-      );
-      return;
+  const handleGeneratePoster = async () => {
+    if (!lastSummary) return;
+    sound.playCashOutGong();
+    const dataUrl = await renderRaidLootPoster(lastSummary, profile);
+    setPosterUrl(dataUrl);
+    if (!posterRewardClaimed) {
+      setPosterRewardClaimed(true);
+      setProfile((prev) => ({
+        ...prev,
+        freeRevivePills: prev.freeRevivePills + 1,
+      }));
     }
-
-    const nextWatch = watchTurn + 1;
-    setWatchTurn(nextWatch);
-    setGreedStreakMult((m) => Math.round((m + 0.55) * 100) / 100);
-    setPickedIds([]);
-    setComboLogs([]);
-    setHand(drawHandCards(relicIds, maxRelicSlots, 5));
-    setSubPhase('picking');
   };
 
-  const triggerConfiscation = (
-    lostSilverWan: number,
-    peakW: number,
-    rCount: number,
-    causeTitle: { zh: string; en: string },
-    epitaph: { zh: string; en: string },
-    earthReviewMeme: { zh: string; en: string }
-  ) => {
-    sound.playConfiscatedCrash();
-    // Lv.3 Estate Nanmu Palace secretly rescues 20% even on confiscation!
-    const rescuedWan = profile.estateLevel >= 3 ? Math.round(lostSilverWan * 0.2 * 10) / 10 : 0;
-    const unlocked = new Set(profile.unlockedAchievements);
-    if (lostSilverWan >= 1500) unlocked.add('ach_greedy_fall');
-
-    const nextProfile: PersistentProfile = {
-      ...profile,
-      vaultSilverWan: Math.round((profile.vaultSilverWan + rescuedWan) * 10) / 10,
-      unlockedAchievements: Array.from(unlocked),
-    };
-    syncProfile(nextProfile);
-
-    const res: RunOutcome = {
-      escaped: false,
-      lordId: selectedLord.id,
-      watchesSurvived: watchTurn,
-      silverExtractedWan: rescuedWan,
-      silverConfiscatedWan: lostSilverWan,
-      peakWanted: peakW,
-      relicCount: rCount,
-      causeTitle,
-      epitaph,
-      earthReviewMeme,
-      rankPercentile: Math.min(82, Math.max(12, 18 + watchTurn * 7.5)),
-      canRewind: lastSafeSnapshot !== null,
-    };
-    setOutcome(res);
-    setPhase('outcome');
-    renderBattlePosterDataUrl(res, nextProfile, lang).then(setPosterUrl).catch(() => {});
-  };
-
-  // Time-Rewind Pill Rescue!
-  const handleUseRewindPill = () => {
-    if (!lastSafeSnapshot) return;
-    if (!isPro && profile.freeRewindPills <= 0) {
-      if (IS_PURE_PLATFORM_MODE) {
-        if (!shareBonusClaimedThisRun) handleDownloadOrSharePoster();
-        return;
-      }
-      setVaultTab('pro');
-      setVaultModalOpen(true);
+  const handleActivateLicense = async () => {
+    if (IS_PURE_PLATFORM_MODE) return;
+    sound.playTap();
+    const res = await verifyOpcLicenseToken(licenseInput);
+    if (!res.valid) {
+      sound.playGuardAlert();
+      setLicenseFeedback({ ok: false, msg: res.reason || '激活码无效' });
       return;
     }
     sound.playCashOutGong();
-    // Roll back any 20% confiscation consolation silver already credited so it cannot be duplicated
-    const rollbackRescued = outcome && !outcome.escaped ? outcome.silverExtractedWan : 0;
-    syncProfile({
-      ...profile,
-      vaultSilverWan: Math.max(0, Math.round((profile.vaultSilverWan - rollbackRescued) * 10) / 10),
-      freeRewindPills: isPro ? profile.freeRewindPills : Math.max(0, profile.freeRewindPills - 1),
-    });
-    setWatchTurn(lastSafeSnapshot.watchTurn);
-    setIncenseLeft(Math.max(18, lastSafeSnapshot.incenseLeft));
-    setWantedStars(Math.max(0, lastSafeSnapshot.wantedStars - 1));
-    setUnbankedSilverWan(lastSafeSnapshot.unbankedSilverWan);
-    setGreedStreakMult(lastSafeSnapshot.greedStreakMult);
-    setRelicIds(lastSafeSnapshot.relicIds);
-    setItems(lastSafeSnapshot.items);
-    setHistoryTitles(lastSafeSnapshot.historyTitles);
-    setOutcome(null);
-    setSubPhase('cashout_prompt');
-    setPhase('desk');
+    confetti({ particleCount: 90, spread: 70, origin: { y: 0.55 } });
+    setProfile((prev) => ({
+      ...prev,
+      proLicenseToken: licenseInput.trim(),
+      proActivatedAt: Date.now(),
+      godMode: {
+        xrayMythicVision: true,
+        featherWeight: true,
+        infiniteTools: true,
+      },
+    }));
+    setLicenseFeedback({ ok: true, msg: '✅ 大内总管金手指已永久激活！三大特权已全部开启！' });
+    setLicenseInput('');
   };
 
-  // Share Poster & Reward Free Pill (Friendly F2P viral loop!)
-  const handleDownloadOrSharePoster = () => {
+  const toggleGodSwitch = (key: keyof RaiderProfile['godMode']) => {
+    if (!isPro) return;
     sound.playTap();
-    if (posterUrl) {
-      const a = document.createElement('a');
-      a.href = posterUrl;
-      a.download = `见好就收战报_${profile.playerUid}.png`;
-      a.click();
-    }
-    if (!shareBonusClaimedThisRun) {
-      setShareBonusClaimedThisRun(true);
-      syncProfile({
-        ...profile,
-        freeRewindPills: profile.freeRewindPills + 1,
-        freeExcuseLeftToday: profile.freeExcuseLeftToday + 2,
-      });
+    setProfile((prev) => ({
+      ...prev,
+      godMode: {
+        ...prev.godMode,
+        [key]: !prev.godMode[key],
+      },
+    }));
+  };
+
+  const handleCopySaveCode = async () => {
+    sound.playTap();
+    const code = exportRaiderSaveCode(profile);
+    try {
+      await navigator.clipboard.writeText(code);
+      setSaveFeedback({ ok: true, msg: '✅ 跨端存档码已复制！换手机/电脑粘贴即可无损恢复金库与装备。' });
+    } catch {
+      setSaveInput(code);
+      setSaveFeedback({ ok: true, msg: '已生成存档码，请长按输入框全选复制。' });
     }
   };
 
-  const suddenRiskPct = computeSuddenDeathRiskPercent(incenseLeft, watchTurn);
+  const handleImportSaveCode = async () => {
+    sound.playTap();
+    const res = await importRaiderSaveCode(saveInput);
+    if (!res.ok || !res.profile) {
+      sound.playGuardAlert();
+      setSaveFeedback({ ok: false, msg: res.error || '存档恢复失败' });
+      return;
+    }
+    sound.playCashOutGong();
+    setProfile(res.profile);
+    setSaveFeedback({ ok: true, msg: '✅ 存档恢复成功！金库银两与神装等级已同步。' });
+    setSaveInput('');
+  };
 
   return (
-    <div className="min-h-dvh w-full bg-[#080504] text-amber-50 flex flex-col">
-      {/* Top Global Navigation Bar */}
-      <header className="sticky top-0 z-30 bg-[#0D0806]/92 backdrop-blur-md border-b border-amber-500/20 px-3 py-2">
-        <div className="max-w-4xl mx-auto flex items-center justify-between gap-2">
-          <button
-            onClick={() => setPhase('lobby')}
-            className="flex items-center gap-2 text-left cursor-pointer"
-          >
-            <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-amber-700 text-black font-extrabold flex items-center justify-center text-sm shadow">
-              贪
-            </span>
-            <div>
-              <div className="text-xs sm:text-sm font-extrabold text-amber-200 leading-tight">
-                {lang === 'zh' ? '见好就收：大内第一贪' : 'Royal Heist: Cash Out'}
-              </div>
-              <div className="text-[10px] text-stone-400 hidden sm:block">
-                {lang === 'zh' ? '朝堂账房搜打撤 × 权财倍率赌桌' : 'Courtroom Extraction Deckbuilder'}
-              </div>
+    <div className="min-h-dvh flex flex-col bg-[#090706] text-amber-50">
+      {/* TOP BAR (52px exact height for RaidActionView viewport math) */}
+      <header className="h-[52px] shrink-0 px-3 border-b border-amber-500/25 bg-[#110B08]/95 backdrop-blur-md flex items-center justify-between gap-2 z-30">
+        <button
+          onClick={() => {
+            sound.playTap();
+            setView('lobby');
+          }}
+          className="flex items-center gap-2 text-left cursor-pointer"
+        >
+          <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-amber-400 to-rose-600 flex items-center justify-center text-black font-black text-sm shadow">
+            夜
+          </span>
+          <div className="leading-tight">
+            <div className="text-sm font-extrabold text-amber-200 tracking-wide flex items-center gap-1.5">
+              <span>夜探王府：摸金撤离</span>
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 border border-amber-400/40 text-amber-300 hidden sm:inline">
+                60帧潜行搜打撤
+              </span>
             </div>
+          </div>
+        </button>
+
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Permanent Vault Silver */}
+          <div className="px-2.5 py-1 rounded-lg bg-stone-900/90 border border-amber-500/35 text-xs flex items-center gap-1.5">
+            <span className="text-stone-400 hidden md:inline">金库:</span>
+            <b className="text-amber-300 font-mono">{formatSilver(profile.vaultSilverWan)}</b>
+            <span className="text-[10px] text-emerald-300 border-l border-stone-700 pl-1.5">
+              💊{isPro ? '∞' : profile.freeRevivePills}
+            </span>
+          </div>
+
+          {/* Save Backup Button */}
+          <button
+            onClick={() => {
+              sound.playTap();
+              setSaveFeedback(null);
+              setSaveModalOpen(true);
+            }}
+            className="px-2.5 py-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-200 text-xs font-bold flex items-center gap-1 cursor-pointer"
+            title="跨设备存档备份"
+          >
+            <HardDriveDownload className="w-3.5 h-3.5 text-amber-300" />
+            <span className="hidden sm:inline">存档</span>
           </button>
 
-          <div className="flex items-center gap-1.5">
+          {/* Pro God-Mode Button (Strictly omitted in Pure Mode builds) */}
+          {!IS_PURE_PLATFORM_MODE && (
             <button
               onClick={() => {
                 sound.playTap();
-                setStreamerMode((s) => !s);
+                setLicenseFeedback(null);
+                setProModalOpen(true);
               }}
-              className={`px-2 py-1 rounded-lg border text-[11px] font-bold flex items-center gap-1 cursor-pointer ${
-                streamerMode
-                  ? 'bg-red-600/30 border-red-400 text-red-200'
-                  : 'bg-stone-900 border-stone-700 text-stone-400'
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-extrabold flex items-center gap-1 cursor-pointer shadow ${
+                isPro
+                  ? 'bg-gradient-to-r from-amber-300 to-amber-500 text-black'
+                  : 'bg-gradient-to-r from-rose-600 to-amber-500 text-white'
               }`}
-              title="主播弹幕公投模式"
-            >
-              <Video className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">{lang === 'zh' ? '主播公投' : 'Stream'}</span>
-            </button>
-
-            <button
-              onClick={() => {
-                sound.playTap();
-                setVaultTab('estates');
-                setVaultModalOpen(true);
-              }}
-              className="px-2.5 py-1 rounded-lg bg-stone-900 border border-amber-500/35 text-[11px] font-bold text-amber-300 flex items-center gap-1 cursor-pointer"
-            >
-              <Building2 className="w-3.5 h-3.5" />
-              <span>{formatSilver(profile.vaultSilverWan, lang)}</span>
-            </button>
-
-            <button
-              onClick={() => {
-                sound.playTap();
-                setVaultTab('pro');
-                setVaultModalOpen(true);
-              }}
-              className="px-2.5 py-1 rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 text-black text-[11px] font-extrabold flex items-center gap-1 cursor-pointer"
             >
               <Crown className="w-3.5 h-3.5" />
-              <span>{IS_PURE_PLATFORM_MODE ? '存档' : isPro ? '总管Pro' : '金手指'}</span>
+              <span>{isPro ? '金手指已开' : '总管金手指'}</span>
             </button>
+          )}
 
-            <button
-              onClick={() => setLang((l) => (l === 'zh' ? 'en' : 'zh'))}
-              className="p-1.5 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 cursor-pointer"
-              title="切换中英文"
-            >
-              <Languages className="w-3.5 h-3.5" />
-            </button>
-
-            <button
-              onClick={() => setMuted(sound.toggleMute())}
-              className="p-1.5 rounded-lg bg-stone-900 border border-stone-700 text-stone-300 cursor-pointer"
-              title="音效开关"
-            >
-              {muted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-            </button>
-          </div>
+          {/* Audio Mute */}
+          <button
+            onClick={() => setMuted(sound.toggleMute())}
+            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700 text-stone-300 cursor-pointer"
+            aria-label="切换音效"
+          >
+            {muted ? <VolumeX className="w-4 h-4 text-red-400" /> : <Volume2 className="w-4 h-4 text-amber-300" />}
+          </button>
         </div>
       </header>
 
-      {/* ==================== PHASE 1: LOBBY ==================== */}
-      {phase === 'lobby' && (
-        <main className="flex-1 max-w-4xl w-full mx-auto px-3.5 py-4 space-y-4">
-          {/* Hero Vault Desk Banner */}
-          <div className="relative rounded-2xl overflow-hidden gold-border-glow">
-            <img
-              src="./assets/bg_vault_desk.webp"
-              alt="Imperial Secret Vault Desk"
-              className="w-full h-48 sm:h-60 object-cover object-center brightness-75"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#090605] via-[#090605]/55 to-transparent" />
-            <div className="absolute inset-x-0 bottom-0 p-4 sm:p-5 space-y-1.5">
-              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-600/85 text-white text-[11px] font-bold">
-                <Flame className="w-3.5 h-3.5" />
-                <span>
-                  {lang === 'zh'
-                    ? '懂哥处刑台：太上皇仅剩一口气，全网仅 7.4% 玩家活着把银子运下江南！'
-                    : 'Only 7.4% of players extract their silver before the Old Emperor dies!'}
-                </span>
-              </div>
-              <h1 className="text-xl sm:text-3xl font-extrabold font-serif-cn text-amber-100">
-                {lang === 'zh'
-                  ? '再摸一把冲八亿两，还是趁夜装船金蝉脱壳？'
-                  : 'Skim One Last Fortune, or Escape Before Confiscation?'}
-              </h1>
-              <p className="text-xs text-stone-300 max-w-2xl">
-                {lang === 'zh'
-                  ? '凑权术红颜羁绊让算盘倍率暴涨 → 在钦差查账生死轮盘里出千忽悠 → 赶在龙涎香断灭抄家前见好就收！三大名角全免费开放：'
-                  : 'Chain Consort & Seal multipliers, bluff Inquisitors in Snap Audit Roulette, and extract to your canal boat before the incense dies!'}
-              </p>
+      {/* ==================== VIEW 1: VISUAL RAID LOBBY ==================== */}
+      {view === 'lobby' && (
+        <main
+          className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-5 py-4 space-y-5 bg-cover bg-center"
+          style={{
+            backgroundImage:
+              'linear-gradient(to bottom, rgba(9,7,6,0.88), rgba(9,7,6,0.97)), url(./assets/bg_vault_desk.webp)',
+          }}
+        >
+          {/* Compact Visual Controls Bar (Zero Text Walls) */}
+          <section className="rounded-2xl wood-panel px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-amber-100">
+              <span className="px-2.5 py-1 rounded-full bg-amber-500/15 border border-amber-400/30">
+                🕹️ 摇杆 / WASD 潜行避灯笼
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-rose-500/15 border border-rose-400/30">
+                🔨 贴近撬暗墙 · 读圈开龙柜爆大红
+              </span>
+              <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30">
+                🎒 俄罗斯方块塞包 · 冲回绿圈登船落袋
+              </span>
             </div>
-          </div>
+            <div className="text-[11px] text-stone-400 font-mono">
+              累计撤离 {profile.totalEscapes}/{profile.totalRaids} 局 · 最高单局 {formatSilver(profile.bestRaidWan)} · 传世大红 {profile.mythicsFound} 件
+            </div>
+          </section>
 
-          {/* 3 Free Playable Lords Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
-            {LORDS.map((lord) => (
-              <div
-                key={lord.id}
-                className="rounded-2xl wood-panel p-4 flex flex-col justify-between gap-3 hover:border-amber-400/70 transition"
-              >
-                <div className="space-y-2.5">
-                  <div className="flex items-center gap-3">
-                    <img
-                      src={lord.avatar}
-                      alt={tText(lord.name, lang)}
-                      className="w-16 h-16 rounded-xl object-cover border border-amber-400/50 shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                        {lord.earthUid}
+          {/* 3 Visual Raid Map Cards */}
+          <section className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base sm:text-lg font-extrabold text-amber-300 flex items-center gap-1.5">
+                <Swords className="w-5 h-5 text-amber-400" />
+                <span>选择今夜潜入目标（点选即刻60帧实机开摸）</span>
+              </h2>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+              {(Object.keys(RAID_MAPS) as MapId[]).map((mId) => {
+                const m = RAID_MAPS[mId];
+                const art = MAP_ART[mId];
+                return (
+                  <div
+                    key={mId}
+                    onClick={() => startRaid(mId)}
+                    className={`group rounded-2xl wood-panel overflow-hidden border ${art.accent} hover:scale-[1.01] transition cursor-pointer flex flex-col`}
+                  >
+                    <div className="relative h-38 overflow-hidden bg-stone-950">
+                      <img
+                        src={art.img}
+                        alt={m.name}
+                        className="w-full h-full object-cover object-top group-hover:scale-105 transition duration-500 opacity-90"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-[#120B08] via-black/30 to-transparent" />
+                      <span className="absolute top-2.5 left-2.5 px-2.5 py-0.5 rounded-full bg-black/80 border border-amber-400/50 text-[11px] font-extrabold text-amber-300">
+                        {art.badge}
                       </span>
-                      <h2 className="text-base font-extrabold text-amber-100 mt-1 truncate">
-                        {tText(lord.name, lang)}
-                      </h2>
-                      <p className="text-[11px] text-stone-400 truncate">{tText(lord.title, lang)}</p>
+                      <span className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded bg-red-950/85 border border-red-500/40 text-[10px] font-mono text-red-200">
+                        {m.escapeRateLabel}
+                      </span>
+                      <div className="absolute bottom-2 left-3 right-3 flex items-end justify-between">
+                        <h3 className="text-lg font-black text-white drop-shadow">{m.name}</h3>
+                        <span className="text-xs font-mono text-amber-300">限时 {m.durationSec}s</span>
+                      </div>
+                    </div>
+
+                    <div className="p-3.5 flex-1 flex flex-col justify-between gap-3">
+                      <p className="text-xs text-stone-300 leading-relaxed">{m.subtitle}</p>
+                      <div className="flex items-center justify-between text-[11px] text-stone-400">
+                        <span>📦 宝箱 {m.chests.length} 处</span>
+                        <span>🏮 巡逻卫 {m.guards.length} 名</span>
+                        <span>🔨 密室暗墙</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-600 group-hover:from-amber-300 group-hover:to-amber-500 text-black font-black text-sm flex items-center justify-center gap-1.5 shadow-lg cursor-pointer"
+                      >
+                        <Flame className="w-4 h-4" />
+                        <span>夜行潜入 · 开箱摸大红</span>
+                      </button>
                     </div>
                   </div>
-
-                  <p className="text-xs italic text-amber-200/85 bg-black/40 rounded-lg p-2.5 border border-stone-800">
-                    {tText(lord.quote, lang)}
-                  </p>
-
-                  <div className="text-xs space-y-1">
-                    <div className="font-bold text-emerald-300">{tText(lord.passiveName, lang)}</div>
-                    <p className="text-[11px] text-stone-300 leading-relaxed">
-                      {tText(lord.passiveDesc, lang)}
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-1.5 pt-1">
-                    {lord.debuffs.map((d, idx) => (
-                      <span
-                        key={idx}
-                        className="text-[10px] px-2 py-0.5 rounded bg-red-950/60 text-red-300 border border-red-800/50"
-                      >
-                        ⚠️ {tText(d, lang)}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-
-                <button
-                  onClick={() => startHeistRun(lord)}
-                  className="w-full py-2.5 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-amber-600 hover:brightness-110 text-black font-extrabold text-sm shadow-lg cursor-pointer active:scale-98 transition"
-                >
-                  {lang === 'zh'
-                    ? `升堂入席 · 全服撤离率 ${lord.globalEscapeRate}%`
-                    : `Enter Vault · ${lord.globalEscapeRate}% Win Rate`}
-                </button>
-              </div>
-            ))}
-          </div>
-
-          {/* Estate Progress Strip */}
-          <div className="rounded-xl wood-panel p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
-            <div className="flex items-center gap-2.5">
-              <ShieldCheck className="w-5 h-5 text-amber-400 shrink-0" />
-              <div>
-                <span className="text-stone-300">
-                  {lang === 'zh' ? '当前永久宅邸：' : 'Current Estate: '}
-                </span>
-                <b className="text-amber-300">{tText(ESTATES[profile.estateLevel].name, lang)}</b>
-                <span className="text-stone-400 ml-2">
-                  ({tText(ESTATES[profile.estateLevel].perkDesc, lang)})
-                </span>
-              </div>
+                );
+              })}
             </div>
-            <button
-              onClick={() => {
-                setVaultTab('estates');
-                setVaultModalOpen(true);
-              }}
-              className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-200 font-bold cursor-pointer"
+          </section>
+
+          {/* Black-Market Gear Upgrade Workshop */}
+          <section className="rounded-2xl wood-panel p-4 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm sm:text-base font-extrabold text-amber-300 flex items-center gap-1.5">
+                <Wrench className="w-4 h-4 text-amber-400" />
+                <span>鬼市夜行黑店 · 用撤离真金白银永久升级装备</span>
+              </h2>
+              <span className="text-xs text-stone-400">
+                可用金库银两：<b className="text-amber-300">{formatSilver(profile.vaultSilverWan)}</b>
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+              {(
+                [
+                  { key: 'bagLevel', title: '🎒 乾坤扩容包袱', icon: Package },
+                  { key: 'bootsLevel', title: '🥾 踏雪神行快靴', icon: Feather },
+                  { key: 'armorLevel', title: '🛡️ 天蚕护心内甲', icon: Shield },
+                  { key: 'gloveLevel', title: '🧤 发丘秒开巧钳', icon: Zap },
+                ] as const
+              ).map(({ key, title }) => {
+                const lv = profile.upgrades[key];
+                const tiers = UPGRADE_TIERS[key];
+                const maxed = lv >= tiers.length - 1;
+                const next = maxed ? null : tiers[lv + 1];
+                const canAfford = next ? profile.vaultSilverWan >= next.costWan : false;
+
+                return (
+                  <div
+                    key={key}
+                    className="rounded-xl bg-stone-950/85 border border-stone-800 p-3 flex flex-col justify-between gap-2.5"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-extrabold text-amber-200">{title}</span>
+                        <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">
+                          Lv.{lv}/{tiers.length - 1}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-stone-300 mt-1">{tiers[lv].label}</div>
+                    </div>
+
+                    {maxed ? (
+                      <div className="py-1.5 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-center text-[11px] font-bold text-emerald-300">
+                        ✨ 已升至满级宗师神装
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleBuyUpgrade(key)}
+                        disabled={!canAfford}
+                        className={`w-full py-1.5 px-2 rounded-lg text-xs font-extrabold transition cursor-pointer ${
+                          canAfford
+                            ? 'bg-amber-500 hover:bg-amber-400 text-black shadow'
+                            : 'bg-stone-900 text-stone-500 border border-stone-800 cursor-not-allowed'
+                        }`}
+                      >
+                        升级 ({formatSilver(next!.costWan)})
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          {/* Mythic Red & Big Gold Visual Loot Preview Strip */}
+          <section className="rounded-2xl wood-panel p-3.5 space-y-2">
+            <div className="text-xs font-extrabold text-rose-300 flex items-center gap-1.5">
+              <Sparkles className="w-4 h-4 text-rose-400" />
+              <span>王府秘库【传世大红 / 镇国大金】实机掉落图鉴（摸出一件直接单车变摩托）</span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              {SHOWCASE_TREASURE_IDS.map((id) => {
+                const t = TREASURES[id];
+                const meta = RARITY_META[t.rarity];
+                return (
+                  <div
+                    key={id}
+                    className="rounded-xl p-2 flex items-center gap-2 border"
+                    style={{ background: meta.bg, borderColor: meta.border }}
+                  >
+                    <CanvasTreasureBadge defId={id} size={38} />
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-extrabold text-white truncate">{t.name}</div>
+                      <div className="text-[10px] font-mono text-amber-200">
+                        {formatSilver(t.valueWan)} · {t.gridW}×{t.gridH}格
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        </main>
+      )}
+
+      {/* ==================== VIEW 2: 60FPS ACTION STEALTH RAID ==================== */}
+      {view === 'raid' && (
+        <RaidActionView
+          key={raidKey}
+          mapId={activeMapId}
+          profile={profile}
+          isPro={isPro}
+          onFinishRaid={handleFinishRaid}
+          onConsumeRevivePill={handleConsumeRevivePill}
+          onOpenProModal={() => setProModalOpen(true)}
+          onAbortToLobby={() => setView('lobby')}
+        />
+      )}
+
+      {/* ==================== VIEW 3: RAID OUTCOME & SHARE POSTER ==================== */}
+      {view === 'outcome' && lastSummary && (
+        <main className="flex-1 max-w-2xl w-full mx-auto px-4 py-6 space-y-4">
+          <div
+            className={`rounded-2xl p-5 space-y-4 text-center ${
+              lastSummary.escaped ? 'wood-panel gold-border-glow' : 'bg-[#170909] crimson-danger-glow'
+            }`}
+          >
+            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-black/50 border border-amber-400/30 text-xs font-bold text-amber-200">
+              <span>{lastSummary.mapName}</span>
+              <span>·</span>
+              <span>用时 {lastSummary.timeUsedSec}s</span>
+              <span>·</span>
+              <span>敲晕侍卫 {lastSummary.guardsKnockedOut} 名</span>
+            </div>
+
+            <h2 className="text-2xl sm:text-3xl font-black text-white">
+              {lastSummary.escaped
+                ? lastSummary.mythicCount > 0
+                  ? `🔥 摸出 ${lastSummary.mythicCount} 件传世大红安全登船！`
+                  : '⛵ 满载奇珍 · 乌篷快船安全撤离！'
+                : '💀 贪心恋战 · 满包奇珍散落王府'}
+            </h2>
+
+            <div
+              className={`text-4xl sm:text-5xl font-black font-mono ${
+                lastSummary.escaped ? 'text-amber-400' : 'text-red-400 line-through'
+              }`}
             >
-              {lang === 'zh' ? '置办江南大宅 / 查史官暗语 →' : 'Upgrade Estate & Medals →'}
+              {formatSilver(lastSummary.totalValueWan)}
+            </div>
+
+            {!lastSummary.escaped && lastSummary.failReason && (
+              <p className="text-xs text-red-200/90">{lastSummary.failReason}</p>
+            )}
+
+            {/* Extracted Loot Visual Grid */}
+            {lastSummary.itemsExtracted.length > 0 && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2 text-left">
+                {lastSummary.itemsExtracted.map((it) => {
+                  const def = TREASURES[it.defId];
+                  if (!def) return null;
+                  const meta = RARITY_META[def.rarity];
+                  return (
+                    <div
+                      key={it.uid}
+                      className="rounded-xl p-2 border flex items-center gap-2"
+                      style={{ background: meta.bg, borderColor: meta.border }}
+                    >
+                      <CanvasTreasureBadge defId={def.id} size={36} />
+                      <div className="min-w-0">
+                        <div className="text-xs font-extrabold text-white truncate">{def.name}</div>
+                        <div className="text-[10px] font-mono text-amber-200">
+                          {meta.label} · {formatSilver(def.valueWan)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Share Poster Preview if generated */}
+            {posterUrl && (
+              <div className="pt-2 space-y-2">
+                <img
+                  src={posterUrl}
+                  alt="晒包战报海报"
+                  className="w-64 mx-auto rounded-xl border-2 border-amber-400 shadow-2xl"
+                />
+                <a
+                  href={posterUrl}
+                  download={`royal-heist-raid-${Date.now()}.png`}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-black font-extrabold text-xs"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>保存高清晒红背包图到相册</span>
+                </a>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
+              <button
+                onClick={handleGeneratePoster}
+                className="py-3 px-4 rounded-xl bg-stone-900 hover:bg-stone-800 border border-amber-400/50 text-amber-200 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>
+                  {posterRewardClaimed
+                    ? '重新生成晒红背包战报'
+                    : '晒背包战报（免费领 +1 金蝉替身丹💊）'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => startRaid(lastSummary.mapId)}
+                className="py-3 px-4 rounded-xl bg-gradient-to-r from-amber-400 to-amber-600 hover:from-amber-300 hover:to-amber-500 text-black font-black text-sm flex items-center justify-center gap-1.5 shadow-lg cursor-pointer"
+              >
+                <RotateCcw className="w-4 h-4" />
+                <span>再来一局 · 继续摸大红</span>
+              </button>
+            </div>
+
+            <button
+              onClick={() => setView('lobby')}
+              className="w-full py-2.5 rounded-xl bg-stone-950 hover:bg-stone-900 border border-stone-800 text-stone-300 text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <Sailboat className="w-4 h-4 text-emerald-400" />
+              <span>返回鬼市大厅 · 用银两升级大包袱与快靴</span>
             </button>
           </div>
         </main>
       )}
 
-      {/* ==================== PHASE 2: VAULT TABLETOP ==================== */}
-      {phase === 'desk' && (
-        <main className="flex-1 max-w-4xl w-full mx-auto px-3 py-3 flex flex-col justify-between gap-3">
-          {/* Top Vital Gauges: Dragon Incense + GTA 5-Star Wanted */}
-          <div className="rounded-2xl wood-panel p-3 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex items-center gap-2">
-                <img
-                  src={selectedLord.avatar}
-                  alt="Lord"
-                  className="w-9 h-9 rounded-lg object-cover border border-amber-400/50"
-                />
-                <div>
-                  <div className="font-bold text-amber-100">
-                    {tText(selectedLord.name, lang)} ·{' '}
-                    <span className="text-amber-400">
-                      {lang === 'zh' ? `第 ${watchTurn} 更天` : `Watch #${watchTurn}`}
-                    </span>
-                  </div>
-                  <div className="text-[11px] text-stone-400">
-                    {lang === 'zh'
-                      ? `贪婪连击加成：+${greedStreakMult.toFixed(2)}x`
-                      : `Greed Streak Bonus: +${greedStreakMult.toFixed(2)}x`}
-                  </div>
-                </div>
-              </div>
-
-              {/* GTA 5-Star Wanted Meter */}
-              <div className="flex items-center gap-2 bg-black/50 px-3 py-1.5 rounded-xl border border-stone-800">
-                <span className="text-[11px] text-stone-400">
-                  {lang === 'zh' ? '锦衣卫警戒' : 'Wanted'}
-                </span>
-                <div className="flex items-center gap-0.5 text-base leading-none">
-                  {[1, 2, 3, 4, 5].map((star) => (
-                    <span
-                      key={star}
-                      className={
-                        wantedStars >= star - 0.25
-                          ? 'text-red-500 drop-shadow-[0_0_6px_rgba(239,68,68,0.8)]'
-                          : 'text-stone-700'
-                      }
-                    >
-                      ★
-                    </span>
-                  ))}
-                </div>
-                <span className="text-xs font-mono text-red-300">{wantedStars.toFixed(1)}</span>
-              </div>
+      {/* ==================== MODAL: CROSS-DEVICE SAVE TRANSFER (RHSAVE2.) ==================== */}
+      {saveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl wood-panel gold-border-glow p-5 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-extrabold text-amber-300 flex items-center gap-1.5">
+                <HardDriveDownload className="w-4 h-4" />
+                <span>跨设备无损存档码 (RHSAVE2.)</span>
+              </h3>
+              <button
+                onClick={() => setSaveModalOpen(false)}
+                className="p-1 rounded-lg bg-stone-900 text-stone-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
 
-            {/* Burning Dragon Incense Stick */}
-            <div className="space-y-1">
-              <div className="flex items-center justify-between text-[11px]">
-                <span className="text-amber-200 font-semibold flex items-center gap-1">
-                  🕯️ {lang === 'zh' ? '太上皇寿元龙涎香' : 'Old Emperor Life Incense'} ({incenseLeft}%)
-                </span>
-                <span
-                  className={`font-bold ${
-                    suddenRiskPct >= 35 ? 'text-red-400 animate-pulse' : 'text-stone-400'
-                  }`}
-                >
-                  {lang === 'zh'
-                    ? `下更断香驾崩风险：${suddenRiskPct}%`
-                    : `Next Watch Collapse Risk: ${suddenRiskPct}%`}
-                </span>
-              </div>
-              <div className="relative h-3 w-full rounded-full bg-stone-900 border border-stone-800 overflow-visible">
-                <div
-                  className="h-full rounded-full bg-gradient-to-r from-stone-600 via-amber-600 to-orange-400 transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.max(3, incenseLeft))}%` }}
-                />
-                <span
-                  className="absolute top-1/2 -translate-y-1/2 w-3.5 h-3.5 rounded-full bg-orange-400 animate-ember"
-                  style={{ left: `calc(${Math.min(98, Math.max(2, incenseLeft))}% - 7px)` }}
-                />
-              </div>
+            <p className="text-xs text-stone-300">
+              本游戏无需注册账号，双槽自动保存。如需更换手机或电脑，一键复制下方防篡改存档码即可完整迁移金库银两与黑市神装：
+            </p>
+
+            <button
+              onClick={handleCopySaveCode}
+              className="w-full py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs cursor-pointer"
+            >
+              📋 一键复制当前存档码
+            </button>
+
+            <div className="space-y-2 pt-1">
+              <textarea
+                value={saveInput}
+                onChange={(e) => setSaveInput(e.target.value)}
+                placeholder="在此粘贴以 RHSAVE2. 开头的跨端存档码..."
+                rows={3}
+                className="w-full rounded-xl bg-stone-950 border border-stone-700 p-2.5 text-xs font-mono text-amber-100 focus:outline-none focus:border-amber-400"
+              />
+              <button
+                onClick={handleImportSaveCode}
+                disabled={!saveInput.trim()}
+                className="w-full py-2 rounded-xl bg-stone-800 hover:bg-stone-700 disabled:opacity-40 text-amber-200 font-bold text-xs cursor-pointer"
+              >
+                📥 校验并恢复存档
+              </button>
             </div>
+
+            {saveFeedback && (
+              <div
+                className={`p-2.5 rounded-xl text-xs font-bold ${
+                  saveFeedback.ok ? 'bg-emerald-950/80 text-emerald-300' : 'bg-red-950/80 text-red-300'
+                }`}
+              >
+                {saveFeedback.msg}
+              </div>
+            )}
           </div>
+        </div>
+      )}
 
-          {/* Center Rosewood Desk Scene + Unbanked Stash + Active Consorts/Relics */}
-          <div className="relative rounded-2xl overflow-hidden gold-border-glow min-h-[210px] flex flex-col justify-between p-3.5">
-            <img
-              src="./assets/bg_vault_desk.webp"
-              alt="Vault Desk"
-              className="absolute inset-0 w-full h-full object-cover brightness-50"
-            />
-            <div className="absolute inset-0 bg-gradient-to-b from-black/65 via-black/35 to-black/85" />
+      {/* ==================== MODAL: PRO GOD-MODE & ED25519 LICENSE (WEB/ITCH ONLY) ==================== */}
+      {!IS_PURE_PLATFORM_MODE && proModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl wood-panel gold-border-glow p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-amber-300 flex items-center gap-1.5">
+                <Crown className="w-5 h-5 text-amber-400" />
+                <span>大内总管 · 摸金宗师金手指买断版</span>
+              </h3>
+              <button
+                onClick={() => setProModalOpen(false)}
+                className="p-1 rounded-lg bg-stone-900 text-stone-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-            {/* Active Relics & Consorts Shelf (Balatro Joker Bar!) */}
-            <div className="relative z-10 flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] font-mono text-amber-300/80 mr-1">
-                {lang === 'zh'
-                  ? `后宅红颜&权印 (${relicIds.length}/${maxRelicSlots}):`
-                  : `Synergy Slots (${relicIds.length}/${maxRelicSlots}):`}
-              </span>
-              {relicIds.map((rid) => {
-                const r = RELICS_AND_CONSORTS[rid];
-                if (!r) return null;
+            {/* 3 God-Mode Switches (Interactive immediately once unlocked!) */}
+            <div className="space-y-2">
+              {(
+                [
+                  {
+                    key: 'xrayMythicVision',
+                    icon: Eye,
+                    title: '👁️ 透视大红天眼',
+                    desc: '隔墙直接看穿全图所有木箱/龙柜里的宝物真名与红光，直奔传国玉玺不走冤枉路！',
+                  },
+                  {
+                    key: 'featherWeight',
+                    icon: Feather,
+                    title: '🪶 无视负重水上漂',
+                    desc: '哪怕背满 3800万两纯金千手佛与玉玺也绝不减速，遛着锦衣卫满院飞奔！',
+                  },
+                  {
+                    key: 'infiniteTools',
+                    icon: InfinityIcon,
+                    title: '♾️ 6×5宗师巨囊 + 无限烟雾/撒银/闷棍/金蝉复活',
+                    desc: '包袱直升满格 30 格，战术迷魂烟、碎银、闷棍与局内金蝉替身丹全部无限次爽用！',
+                  },
+                ] as const
+              ).map(({ key, icon: Icon, title, desc }) => {
+                const active = isPro && profile.godMode[key];
                 return (
                   <div
-                    key={rid}
-                    title={tText(r.desc, lang)}
-                    className={`px-2 py-1 rounded-lg text-[11px] font-bold border flex items-center gap-1 backdrop-blur-md ${
-                      r.kind === 'consort'
-                        ? 'bg-rose-950/75 border-rose-400/50 text-rose-200'
-                        : 'bg-amber-950/75 border-amber-400/50 text-amber-200'
+                    key={key}
+                    onClick={() => toggleGodSwitch(key)}
+                    className={`rounded-xl p-3 border flex items-start justify-between gap-3 transition ${
+                      isPro ? 'cursor-pointer' : 'opacity-90'
+                    } ${
+                      active
+                        ? 'bg-amber-500/15 border-amber-400/70'
+                        : 'bg-stone-950/85 border-stone-800'
                     }`}
                   >
-                    <span>{r.kind === 'consort' ? '🌸' : '🏺'}</span>
-                    <span>{tText(r.name, lang)}</span>
+                    <div className="space-y-0.5">
+                      <div className="text-xs font-extrabold text-amber-200 flex items-center gap-1.5">
+                        <Icon className="w-4 h-4 text-amber-400 shrink-0" />
+                        <span>{title}</span>
+                      </div>
+                      <p className="text-[11px] text-stone-400 leading-relaxed">{desc}</p>
+                    </div>
+                    <span
+                      className={`shrink-0 px-2 py-0.5 rounded-full text-[10px] font-black ${
+                        active
+                          ? 'bg-emerald-400 text-black'
+                          : isPro
+                          ? 'bg-stone-800 text-stone-300'
+                          : 'bg-stone-900 text-amber-400 border border-amber-500/30'
+                      }`}
+                    >
+                      {active ? '已开启' : isPro ? '已关闭' : '待解锁'}
+                    </span>
                   </div>
                 );
               })}
             </div>
 
-            {/* Live Abacus Combo Feed */}
-            {comboLogs.length > 0 && (
-              <div className="relative z-10 my-2 flex flex-wrap gap-1.5">
-                {comboLogs.map((log, i) => (
-                  <span
-                    key={i}
-                    className="px-2.5 py-1 rounded-lg bg-amber-500/20 border border-amber-400/60 text-xs font-extrabold text-amber-200 shadow"
+            {!isPro ? (
+              <div className="space-y-2.5 pt-1 border-t border-stone-800">
+                <div className="rounded-xl bg-amber-950/40 border border-amber-500/30 p-2.5 text-[11px] text-amber-100 leading-relaxed">
+                  💡 <b>全地图零门槛免费畅玩！</b> 如想爽开上方三大【总管金手指】特权：在 <b>闲鱼 / 小红书</b> 搜索
+                  <b className="text-amber-300">「夜探王府总管版」</b>（一杯奶茶钱 <b>¥12.9</b> 永久买断，24h自动秒发
+                  <code className="px-1 bg-black/50 rounded">OPC1.</code> 离线防伪激活码）。
+                </div>
+
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={licenseInput}
+                    onChange={(e) => setLicenseInput(e.target.value)}
+                    placeholder="粘贴 OPC1. 开头的官方防伪激活码"
+                    className="flex-1 rounded-xl bg-stone-950 border border-stone-700 px-3 py-2 text-xs font-mono text-amber-100 focus:outline-none focus:border-amber-400"
+                  />
+                  <button
+                    onClick={handleActivateLicense}
+                    disabled={!licenseInput.trim()}
+                    className="px-4 py-2 rounded-xl bg-gradient-to-r from-amber-400 to-amber-600 disabled:opacity-40 text-black font-black text-xs flex items-center gap-1 cursor-pointer shrink-0"
                   >
-                    ⚡ {log.label} → {log.multAfter}x
-                  </span>
-                ))}
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>验签激活</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-xl bg-emerald-950/60 border border-emerald-500/40 p-2.5 text-center text-xs font-bold text-emerald-300">
+                👑 尊贵的大内总管：您的 Ed25519 防伪授权已永久生效（点击上方卡片可随时自由开关金手指）
               </div>
             )}
 
-            {/* Unbanked Stash Display */}
-            <div className="relative z-10 flex items-end justify-between gap-2 pt-2">
-              <div>
-                <div className="text-[11px] text-amber-200/80">
-                  {lang === 'zh'
-                    ? '📦 桌底暗格未转移现银（断香即全爆清零！）'
-                    : '📦 Unbanked Cellar Silver (Lost if Confiscated!)'}
-                </div>
-                <div className="text-3xl sm:text-4xl font-extrabold text-amber-400 tracking-tight drop-shadow">
-                  {formatSilver(unbankedSilverWan, lang)}
-                </div>
-              </div>
-
-              {/* Quick Inventory Badges */}
-              <div className="flex items-center gap-1.5 text-[11px] bg-black/65 px-2.5 py-1.5 rounded-xl border border-stone-700">
-                <span title="西洋窥镜">🔭{items.spyglass}</span>
-                <span title="替死鬼门客">🎭{items.scapegoat}</span>
-                <span title="东珠封口茶">🍵{items.bribe_tea}</span>
-                <span title="重洗骰子">🎲{items.loaded_dice}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* SUBPHASE A: PICK UP TO 3 CARDS */}
-          {subPhase === 'picking' && (
-            <div className="space-y-3">
-              {/* Pre-Action Risk/Reward Bar */}
-              <div className="rounded-xl bg-stone-950/90 border border-stone-800 px-3 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
-                {previewCalc ? (
-                  <div className="flex flex-wrap items-center gap-3">
-                    <span className="text-emerald-400 font-bold">
-                      预计本更入账：+{formatSilver(previewCalc.gainedSilverWan, lang)}
-                    </span>
-                    <span className="text-amber-300">
-                      香火变化：{previewCalc.nextIncense}%
-                    </span>
-                    <span className="text-red-300">
-                      警戒变化：{previewCalc.nextWanted.toFixed(1)}★
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-stone-400">
-                    {lang === 'zh'
-                      ? '👇 请从门房呈上的肥差/红颜/狂野牌中挑选 1～3 张拍上算盘结算：'
-                      : '👇 Select 1 to 3 cards below to slam onto your abacus:'}
-                  </span>
-                )}
-
-                <button
-                  disabled={items.loaded_dice <= 0}
-                  onClick={handleRerollHand}
-                  className="px-2.5 py-1 rounded-lg bg-stone-800 hover:bg-stone-700 disabled:opacity-40 text-amber-300 font-semibold flex items-center gap-1 cursor-pointer"
-                >
-                  <Dices className="w-3.5 h-3.5" />
-                  <span>
-                    {lang === 'zh' ? `重洗牌桌 (${items.loaded_dice})` : `Reroll (${items.loaded_dice})`}
-                  </span>
-                </button>
-              </div>
-
-              {/* 5-Card Hand */}
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2.5">
-                {hand.map((card) => {
-                  const selected = pickedIds.includes(card.id);
-                  const badgeStyle =
-                    card.category === 'wild'
-                      ? 'border-red-500/60 bg-gradient-to-b from-red-950/55 to-[#140908]'
-                      : card.category === 'consort'
-                      ? 'border-rose-400/60 bg-gradient-to-b from-rose-950/50 to-[#14090C]'
-                      : card.category === 'relic'
-                      ? 'border-purple-400/60 bg-gradient-to-b from-purple-950/45 to-[#110916]'
-                      : card.category === 'cover'
-                      ? 'border-emerald-500/50 bg-gradient-to-b from-emerald-950/45 to-[#08130E]'
-                      : 'border-amber-500/40 bg-gradient-to-b from-[#23160E] to-[#120B08]';
-
-                  return (
-                    <button
-                      key={card.id}
-                      type="button"
-                      onClick={() => togglePickCard(card.id)}
-                      className={`text-left rounded-xl p-3 border transition-all flex flex-col justify-between gap-2 cursor-pointer ${badgeStyle} ${
-                        selected
-                          ? 'ring-2 ring-amber-400 -translate-y-1.5 shadow-[0_8px_24px_rgba(245,158,11,0.3)]'
-                          : 'hover:border-amber-300/70'
-                      }`}
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-black/50 text-amber-200">
-                            {card.category === 'wild'
-                              ? '狂野掀桌'
-                              : card.category === 'consort'
-                              ? '绝色红颜'
-                              : card.category === 'relic'
-                              ? '镇宅神印'
-                              : card.category === 'cover'
-                              ? '化险消星'
-                              : '肥差敛财'}
-                          </span>
-                          {selected && (
-                            <span className="text-[10px] font-extrabold px-1.5 py-0.5 rounded bg-amber-400 text-black">
-                              已盖印
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-xs font-extrabold text-amber-50 leading-snug">
-                          {tText(card.name, lang)}
-                        </div>
-                        <p className="text-[11px] text-stone-300 leading-snug">
-                          {tText(card.subtitle, lang)}
-                        </p>
-                      </div>
-
-                      <div className="pt-2 border-t border-white/10 flex flex-wrap items-center justify-between text-[10px] font-mono gap-1">
-                        <span className="text-amber-300 font-bold">+{card.baseSilverWan}万</span>
-                        <span className="text-sky-300">+{card.multAdd}x</span>
-                        <span className={card.wantedDelta > 0 ? 'text-red-400' : 'text-emerald-400'}>
-                          {card.wantedDelta > 0 ? `+${card.wantedDelta}★` : `${card.wantedDelta}★`}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-
-              <button
-                disabled={pickedIds.length === 0}
-                onClick={handleExecuteWatch}
-                className="w-full py-3.5 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:brightness-110 disabled:opacity-40 text-black font-extrabold text-base shadow-xl cursor-pointer transition"
-              >
-                {lang === 'zh'
-                  ? `🧮 算盘落子 · 结算已选 (${pickedIds.length}/3 张)`
-                  : `🧮 Slam Abacus · Resolve (${pickedIds.length}/3 Cards)`}
-              </button>
-            </div>
-          )}
-
-          {/* SUBPHASE B: RESOLVING ANIMATION */}
-          {subPhase === 'resolving' && (
-            <div className="rounded-2xl wood-panel p-6 text-center space-y-2">
-              <div className="text-base font-bold text-amber-300 animate-pulse">
-                {lang === 'zh' ? '噼里啪啦——紫金算盘飞速拨算纹银中…' : 'Calculating Synergies & Silver Ingots...'}
-              </div>
-            </div>
-          )}
-
-          {/* SUBPHASE C: EXTRACTION CASH-OUT VS PUSH GREED! */}
-          {subPhase === 'cashout_prompt' && (
-            <div className="rounded-2xl gold-border-glow bg-[#160D09] p-4 space-y-3.5">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <div className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
-                    <AlertTriangle className="w-4 h-4 text-orange-400" />
-                    <span>
-                      {lang === 'zh'
-                        ? `第 ${watchTurn} 更摸金完毕！后门乌篷船已备妥，管家颤声请示：`
-                        : `Watch #${watchTurn} Complete! Your canal boat awaits at the secret dock:`}
-                    </span>
-                  </div>
-                  <p className="text-xs text-stone-300 mt-1">
-                    {lang === 'zh'
-                      ? `现在收手可 100% 安全带走 ${formatSilver(unbankedSilverWan, lang)}；若再贪下一更，全局倍率再涨 +0.55x，但需硬扛 ${suddenRiskPct}% 断香抄家风险！`
-                      : `Extract now to bank ${formatSilver(unbankedSilverWan, lang)} safely, or risk a ${suddenRiskPct}% collapse for +0.55x more multiplier!`}
-                  </p>
-                </div>
-                {streamerMode && (
-                  <span className="px-2.5 py-1 rounded-lg bg-red-600/30 border border-red-400 text-xs font-extrabold text-red-200 shrink-0">
-                    🎥 弹幕扣1撤 / 扣2贪
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <button
-                  onClick={handleCashOutEscape}
-                  className="py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:brightness-110 text-black font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg cursor-pointer"
-                >
-                  <Sailboat className="w-5 h-5" />
-                  <span>
-                    {streamerMode ? '【扣1】' : ''}
-                    {lang === 'zh'
-                      ? `见好就收 · 带 ${formatSilver(unbankedSilverWan, lang)} 登船撤离！`
-                      : `CASH OUT · Bank ${formatSilver(unbankedSilverWan, lang)} Safely!`}
-                  </span>
-                </button>
-
-                <button
-                  onClick={handlePushGreedNextWatch}
-                  className="py-3.5 px-4 rounded-xl bg-gradient-to-r from-red-600 via-orange-600 to-amber-500 hover:brightness-110 text-white font-extrabold text-sm flex items-center justify-center gap-2 shadow-lg cursor-pointer"
-                >
-                  <Flame className="w-5 h-5" />
-                  <span>
-                    {streamerMode ? '【扣2】' : ''}
-                    {lang === 'zh'
-                      ? `富贵险中求 · 再贪下一更 (+0.55x / ${suddenRiskPct}%断香)`
-                      : `PUSH LUCK · Next Watch (+0.55x / ${suddenRiskPct}% Risk)`}
-                  </span>
-                </button>
-              </div>
-            </div>
-          )}
-        </main>
-      )}
-
-      {/* ==================== PHASE 3: OUTCOME & VIRAL POSTER ==================== */}
-      {phase === 'outcome' && outcome && (
-        <main className="flex-1 max-w-2xl w-full mx-auto px-3.5 py-5 space-y-4">
-          <div
-            className={`rounded-2xl p-5 space-y-4 ${
-              outcome.escaped ? 'wood-panel gold-border-glow' : 'bg-[#160808] crimson-danger-glow'
-            }`}
-          >
-            <div className="flex items-center justify-between gap-2">
-              <span
-                className={`px-2.5 py-1 rounded-md text-xs font-extrabold ${
-                  outcome.escaped ? 'bg-amber-400 text-black' : 'bg-red-600 text-white'
-                }`}
-              >
-                {outcome.escaped
-                  ? lang === 'zh'
-                    ? '⛵ 金蝉脱壳 · 满载落袋'
-                    : '⛵ CLEAN EXTRACTION'
-                  : lang === 'zh'
-                  ? '🚨 晚撤一秒 · 家产抄没'
-                  : '🚨 CONFISCATED'}
-              </span>
-              <span className="text-xs text-stone-400">
-                {lang === 'zh'
-                  ? `击败全服 ${outcome.rankPercentile.toFixed(1)}% 玩家`
-                  : `Beat ${outcome.rankPercentile.toFixed(1)}% of Players`}
-              </span>
-            </div>
-
-            <h2 className="text-2xl font-extrabold font-serif-cn text-amber-100">
-              {tText(outcome.causeTitle, lang)}
-            </h2>
-
-            <div className="rounded-xl bg-black/50 p-4 border border-white/10 text-center">
-              <div className="text-xs text-stone-400">
-                {outcome.escaped
-                  ? lang === 'zh'
-                    ? '本局成功洗白存入总金库'
-                    : 'Silver Added to Permanent Vault'
-                  : lang === 'zh'
-                  ? '被新皇铁骑当场抄没现银'
-                  : 'Unbanked Silver Seized by New Emperor'}
-              </div>
+            {licenseFeedback && (
               <div
-                className={`text-4xl font-extrabold mt-1 ${
-                  outcome.escaped ? 'text-amber-400' : 'text-red-400'
+                className={`p-2.5 rounded-xl text-xs font-bold ${
+                  licenseFeedback.ok ? 'bg-emerald-950/80 text-emerald-300' : 'bg-red-950/80 text-red-300'
                 }`}
               >
-                {formatSilver(
-                  outcome.escaped ? outcome.silverExtractedWan : outcome.silverConfiscatedWan,
-                  lang
-                )}
-              </div>
-              {!outcome.escaped && outcome.silverExtractedWan > 0 && (
-                <div className="text-xs text-emerald-400 mt-1">
-                  🛡️ 恭王府楠木夹墙暗格生效：秘密抢救回 {formatSilver(outcome.silverExtractedWan, lang)}！
-                </div>
-              )}
-            </div>
-
-            <p className="text-xs text-stone-200 leading-relaxed">{tText(outcome.epitaph, lang)}</p>
-            <p className="text-xs italic text-amber-300/90 bg-black/35 p-3 rounded-xl border border-amber-500/20">
-              {tText(outcome.earthReviewMeme, lang)}
-            </p>
-
-            {/* LOSS AVERSION TIME-REWIND RESCUE BUTTON! */}
-            {!outcome.escaped && outcome.canRewind && (
-              <div className="rounded-xl bg-gradient-to-r from-amber-950/80 via-stone-900 to-amber-950/80 border border-amber-400/60 p-3.5 space-y-2">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="font-extrabold text-amber-300">
-                    💊 不甘心几千万两白白充公？吞服【假死金蝉丸】时光倒流回上一更码头！
-                  </span>
-                  <span className="text-[11px] text-amber-200 font-mono">
-                    {isPro ? 'Pro 无限颗' : `剩余免费丸: ${profile.freeRewindPills}`}
-                  </span>
-                </div>
-                <button
-                  disabled={IS_PURE_PLATFORM_MODE && profile.freeRewindPills <= 0 && shareBonusClaimedThisRun}
-                  onClick={handleUseRewindPill}
-                  className="w-full py-2.5 rounded-lg bg-amber-400 hover:bg-amber-300 disabled:opacity-45 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  <span>
-                    {isPro || profile.freeRewindPills > 0
-                      ? `立即时光回溯 · 抢回 ${formatSilver(outcome.silverConfiscatedWan, lang)} 安全登船！`
-                      : IS_PURE_PLATFORM_MODE
-                      ? shareBonusClaimedThisRun
-                        ? '本局免费金蝉丸已用尽'
-                        : '点此保存战报 · 免费领 1 颗金蝉丸立即回溯！'
-                      : '解锁大内总管金手指 · 无限时光回溯悔棋'}
-                  </span>
-                </button>
-              </div>
-            )}
-
-            {/* Action Buttons */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-              <button
-                onClick={handleDownloadOrSharePoster}
-                className="py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-black font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Share2 className="w-4 h-4" />
-                <span>
-                  {shareBonusClaimedThisRun
-                    ? lang === 'zh'
-                      ? '保存 9:16 炫耀战报图（已领赠丸）'
-                      : 'Download Battle Poster'
-                    : lang === 'zh'
-                    ? '保存晒图战报（免费领+1金蝉悔棋丸！）'
-                    : 'Save Poster (+1 Free Rewind Pill!)'}
-                </span>
-              </button>
-
-              <button
-                onClick={() => startHeistRun(selectedLord)}
-                className="py-3 rounded-xl bg-stone-800 hover:bg-stone-700 border border-amber-500/35 text-amber-200 font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Sparkles className="w-4 h-4" />
-                <span>{lang === 'zh' ? '再开一局 · 冲击八亿两神话' : 'Play Another Heist'}</span>
-              </button>
-            </div>
-
-            {posterUrl && (
-              <div className="pt-2 space-y-1.5">
-                <div className="text-[11px] text-center text-stone-400">
-                  {lang === 'zh'
-                    ? '👇 已自动生成高清防盗战报长图（长按或点击上方按钮保存晒群）：'
-                    : '👇 Generated Shareable Record Scroll:'}
-                </div>
-                <img
-                  src={posterUrl}
-                  alt="Shareable Battle Report"
-                  className="w-full max-w-xs mx-auto rounded-xl border border-amber-500/30 shadow-xl"
-                />
+                {licenseFeedback.msg}
               </div>
             )}
           </div>
-        </main>
+        </div>
       )}
-
-      {/* Buckshot Roulette Snap Audit Modal */}
-      {audit && (
-        <AuditModal
-          encounter={audit}
-          unbankedSilverWan={unbankedSilverWan}
-          items={items}
-          isPro={isPro}
-          freeExcuseLeft={profile.freeExcuseLeftToday}
-          scapegoatArmed={scapegoatArmed}
-          peekedIndex={peekedScrollIdx}
-          streamerMode={streamerMode}
-          lang={lang}
-          onUseSpyglass={handleAuditSpyglass}
-          onUseScapegoat={handleAuditScapegoat}
-          onUseBribeTea={handleAuditBribeTea}
-          onSubmitExcuse={handleAuditExcuse}
-          onPickScroll={handleAuditPickScroll}
-        />
-      )}
-
-      {/* Permanent Vault, Medals & God-Mode / Save Sync Modal */}
-      <VaultModals
-        isOpen={vaultModalOpen}
-        initialTab={vaultTab}
-        profile={profile}
-        lang={lang}
-        onClose={() => setVaultModalOpen(false)}
-        onUpgradeEstate={(level, costWan) => {
-          syncProfile({
-            ...profile,
-            estateLevel: level,
-            vaultSilverWan: Math.max(0, Math.round((profile.vaultSilverWan - costWan) * 10) / 10),
-          });
-        }}
-        onActivatePro={(token) => {
-          syncProfile({
-            ...profile,
-            proLicenseToken: token,
-            proActivatedAt: Date.now(),
-            godModeConfig: {
-              bonusStartSilverWan: true,
-              slowIncense: true,
-              extraRelicSlot: true,
-            },
-          });
-        }}
-        onToggleGodMode={(key) => {
-          syncProfile({
-            ...profile,
-            godModeConfig: {
-              ...profile.godModeConfig,
-              [key]: !profile.godModeConfig[key],
-            },
-          });
-        }}
-        onRestoreProfile={(restored) => {
-          syncProfile(restored);
-        }}
-      />
     </div>
   );
 };
