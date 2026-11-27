@@ -1,0 +1,6 @@
+node_modules/
+dist/
+dist-pure/
+.DS_Store
+release/*KEYS*
+release/*.secret*
