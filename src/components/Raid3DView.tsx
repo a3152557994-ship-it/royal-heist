@@ -4,9 +4,11 @@ import {
   Backpack,
   Clock,
   Coins,
+  Compass,
   Crown,
   Flame,
   Heart,
+  HelpCircle,
   Pill,
   Skull,
   Sparkles,
@@ -53,7 +55,12 @@ const INITIAL_HUD: HudSnapshot = {
   chestsOpened: 0,
   chestsTotal: 8,
   guardsKnockedOut: 0,
+  hasMoved: false,
+  canAttackGuard: false,
+  guideGoal: 'move',
 };
+
+const GUIDE_SEEN_KEY = 'rh_guide_seen_v4';
 
 export const Raid3DView: React.FC<Raid3DViewProps> = ({
   mapId,
@@ -78,6 +85,24 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
   const [toast, setToast] = useState<{ msg: string; tone: 'gold' | 'red' | 'cyan' } | null>(null);
   const [damageFlash, setDamageFlash] = useState(false);
   const [reviveModalReason, setReviveModalReason] = useState<string | null>(null);
+  const [guideOpen, setGuideOpen] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      return !window.localStorage.getItem(GUIDE_SEEN_KEY);
+    } catch {
+      return false;
+    }
+  });
+
+  const dismissGuide = () => {
+    sound.playTap();
+    setGuideOpen(false);
+    try {
+      window.localStorage.setItem(GUIDE_SEEN_KEY, '1');
+    } catch {
+      // ignore storage errors
+    }
+  };
 
   // Virtual joystick visual knob state
   const [joyActive, setJoyActive] = useState(false);
@@ -102,10 +127,10 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
     sceneRef.current?.syncProfile(profile, isPro);
   }, [profile, isPro]);
 
-  // Unified pause authority (Backpack, Revive Modal, OR Header Save/Pro Modals!)
+  // Unified pause authority (First-Time Guide, Backpack, Revive Modal, OR Header Save/Pro Modals!)
   useEffect(() => {
-    sceneRef.current?.setPaused(bagOpen || Boolean(reviveModalReason) || externalPaused);
-  }, [bagOpen, reviveModalReason, externalPaused]);
+    sceneRef.current?.setPaused(guideOpen || bagOpen || Boolean(reviveModalReason) || externalPaused);
+  }, [guideOpen, bagOpen, reviveModalReason, externalPaused]);
 
   // Mount Three.js 3D Stealth Engine
   useEffect(() => {
@@ -168,6 +193,13 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (reviveModalReason || externalPaused) return;
       const k = e.key.toLowerCase();
+      if (guideOpen) {
+        if (k === 'escape' || k === 'enter' || k === ' ') {
+          e.preventDefault();
+          dismissGuide();
+        }
+        return;
+      }
       if (k === 'b' || k === 'tab') {
         e.preventDefault();
         sound.playTap();
@@ -183,10 +215,10 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [bagOpen, reviveModalReason, externalPaused]);
+  }, [guideOpen, bagOpen, reviveModalReason, externalPaused]);
 
   const openBagManual = () => {
-    if (reviveModalReason || externalPaused) return;
+    if (guideOpen || reviveModalReason || externalPaused) return;
     sound.playTap();
     setBagOpen(true);
   };
@@ -224,7 +256,7 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
 
   // Virtual Joystick Pointer Handlers
   const onJoyDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    if (bagOpen || reviveModalReason) return;
+    if (guideOpen || bagOpen || reviveModalReason || externalPaused) return;
     e.currentTarget.setPointerCapture(e.pointerId);
     const rect = e.currentTarget.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
@@ -325,11 +357,24 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
               ({hud.bagWeightKg}kg)
             </span>
           </button>
+
+          {/* Always-accessible Help / Controls Guide button */}
+          <button
+            onClick={() => {
+              sound.playTap();
+              setGuideOpen(true);
+            }}
+            className="px-2 py-1.5 rounded-xl bg-black/70 hover:bg-black/90 border border-sky-400/45 text-sky-200 text-xs font-bold flex items-center gap-1 backdrop-blur-md cursor-pointer"
+            title="查看玩法与攻击操作说明"
+          >
+            <HelpCircle className="w-3.5 h-3.5 text-sky-300" />
+            <span className="hidden sm:inline">玩法</span>
+          </button>
         </div>
 
         {/* Stamina & Alert Strip */}
         <div className="flex items-center gap-2">
-          <div className="w-28 h-1.5 rounded-full bg-black/70 border border-stone-700/80 overflow-hidden">
+          <div className="w-24 sm:w-28 h-1.5 rounded-full bg-black/70 border border-stone-700/80 overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-sky-400 to-cyan-300 transition-all duration-100"
               style={{ width: `${Math.round(hud.stamina)}%` }}
@@ -340,6 +385,36 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
               🚨 警报 · {hud.alertCount}名锦衣卫追击!
             </span>
           )}
+        </div>
+
+        {/* Live Step-by-Step Mission Guide Pill (So nobody EVER wonders what to do!) */}
+        <div
+          className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1 rounded-xl border backdrop-blur-md text-[10px] sm:text-xs font-extrabold shadow-lg max-w-[198px] sm:max-w-md ${
+            hud.canAttackGuard
+              ? 'bg-rose-950/90 border-rose-400 text-rose-100 animate-pulse'
+              : hud.guideGoal === 'extract'
+              ? 'bg-emerald-950/85 border-emerald-400/75 text-emerald-100'
+              : 'bg-black/70 border-amber-400/45 text-amber-100'
+          }`}
+        >
+          <Compass
+            className={`w-3.5 h-3.5 shrink-0 ${
+              hud.canAttackGuard
+                ? 'text-rose-300'
+                : hud.guideGoal === 'extract'
+                ? 'text-emerald-300'
+                : 'text-amber-300'
+            }`}
+          />
+          <span className="leading-snug">
+            {hud.canAttackGuard
+              ? '侍卫在攻击范围内！点右下【攻击】或直接点他敲晕！'
+              : hud.guideGoal === 'move'
+              ? '直接点地面 / 拖左下摇杆 / 按 WASD 往前走，跟脚下金箭头找宝箱'
+              : hud.guideGoal === 'extract'
+              ? '跟脚下绿箭头冲回南边绿圈乌篷船，站 1.5 秒带走全部银两！'
+              : '避开黄灯笼，贴近发光宝箱/暗墙自动撬开；近身侍卫可点【攻击】敲晕'}
+          </span>
         </div>
       </div>
 
@@ -361,7 +436,7 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
 
       {/* 5. REAL MUSEUM ANTIQUE LOOT DISCOVERY TOAST */}
       {lootFlashDef && (
-        <div className="pointer-events-none absolute top-32 sm:top-20 left-1/2 -translate-x-1/2 z-30 w-max max-w-[90%] animate-bounce">
+        <div className="pointer-events-none absolute top-44 sm:top-20 left-1/2 -translate-x-1/2 z-30 w-max max-w-[90%] animate-bounce">
           <div
             className="rounded-2xl px-3.5 sm:px-4 py-2 sm:py-2.5 border-2 flex items-center gap-2.5 sm:gap-3 shadow-2xl backdrop-blur-md"
             style={{
@@ -395,7 +470,7 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
 
       {/* 6. TACTICAL TOAST */}
       {toast && !lootFlashDef && (
-        <div className="pointer-events-none absolute top-32 sm:top-20 left-1/2 -translate-x-1/2 z-20 max-w-[260px] sm:max-w-md text-center">
+        <div className="pointer-events-none absolute top-44 sm:top-20 left-1/2 -translate-x-1/2 z-20 max-w-[260px] sm:max-w-md text-center">
           <div
             className={`px-3.5 py-1.5 rounded-full text-[11px] sm:text-xs font-extrabold border backdrop-blur-md shadow-xl ${
               toast.tone === 'red'
@@ -419,26 +494,32 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
         </div>
       )}
 
-      {/* 8. BOTTOM-LEFT VIRTUAL JOYSTICK (Zero overlap even on 360px phones: x=8..88px!) */}
+      {/* 8. BOTTOM-LEFT VIRTUAL JOYSTICK (Bright 4-way arrows + clear "拖动" cue; zero overlap on 360px!) */}
       <div
         onPointerDown={onJoyDown}
         onPointerMove={onJoyMove}
         onPointerUp={onJoyUp}
         onPointerCancel={onJoyUp}
-        className="touch-none absolute bottom-3 left-2 sm:bottom-4 sm:left-4 z-20 w-20 h-20 sm:w-28 sm:h-28 rounded-full bg-black/35 border border-amber-400/35 backdrop-blur-sm flex items-center justify-center cursor-grab active:cursor-grabbing"
+        className={`touch-none absolute bottom-3 left-2 sm:bottom-4 sm:left-4 z-20 w-20 h-20 sm:w-28 sm:h-28 rounded-full bg-black/50 border-2 backdrop-blur-sm flex items-center justify-center cursor-grab active:cursor-grabbing ${
+          !hud.hasMoved ? 'border-amber-400 shadow-[0_0_20px_rgba(251,191,36,0.45)]' : 'border-amber-400/50'
+        }`}
       >
-        <div className="w-9 h-9 sm:w-12 sm:h-12 rounded-full border border-dashed border-amber-300/30" />
+        {/* 4 directional arrow cues so everyone instantly knows it's a movement stick */}
+        <span className="pointer-events-none absolute top-1 text-[8px] text-amber-300/85">▲</span>
+        <span className="pointer-events-none absolute bottom-1 text-[8px] text-amber-300/85">▼</span>
+        <span className="pointer-events-none absolute left-1.5 text-[8px] text-amber-300/85">◄</span>
+        <span className="pointer-events-none absolute right-1.5 text-[8px] text-amber-300/85">►</span>
         <div
           className={`absolute w-9 h-9 sm:w-11 sm:h-11 rounded-full transition-colors flex items-center justify-center shadow-lg ${
             joyActive
-              ? 'bg-amber-400/90 border-2 border-white'
-              : 'bg-amber-500/55 border border-amber-200/70'
+              ? 'bg-amber-300 border-2 border-white'
+              : 'bg-amber-400/85 border border-amber-100'
           }`}
           style={{
             transform: `translate(${joyKnob.x}px, ${joyKnob.y}px)`,
           }}
         >
-          <span className="text-[9px] sm:text-[10px] font-black text-black">潜行</span>
+          <span className="text-[9px] sm:text-[10px] font-black text-black">拖动</span>
         </div>
       </div>
 
@@ -486,20 +567,30 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
           <span className="hidden sm:inline text-[8px] font-mono text-stone-400">[2]</span>
         </button>
 
-        {/* 3 / Space: Backstab Ambush */}
+        {/* 3 / Space / J: Melee Ambush Attack (Pulses brightly when a guard is in strike range!) */}
         <button
           type="button"
           onClick={() => sceneRef.current?.useBackstab()}
           disabled={!hud.infiniteTools && hud.backstabCd > 0}
-          className="relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl bg-gradient-to-b from-cyan-900/85 to-slate-950/90 hover:brightness-110 disabled:opacity-50 border border-cyan-400/70 backdrop-blur-md flex flex-col items-center justify-center gap-0.5 text-cyan-100 shadow-lg cursor-pointer active:scale-95"
+          className={`relative w-11 h-11 sm:w-14 sm:h-14 rounded-xl sm:rounded-2xl hover:brightness-110 disabled:opacity-50 border backdrop-blur-md flex flex-col items-center justify-center gap-0.5 shadow-lg cursor-pointer active:scale-95 transition ${
+            hud.canAttackGuard
+              ? 'bg-gradient-to-b from-rose-600 to-orange-600 border-amber-300 text-white animate-pulse shadow-[0_0_22px_rgba(244,63,94,0.85)]'
+              : 'bg-gradient-to-b from-cyan-900/90 to-slate-950/90 border-cyan-400/75 text-cyan-100'
+          }`}
+          title="近身攻击/闷棍：靠近锦衣卫亮红圈时一击敲晕9.5秒 (Space / J)"
         >
-          <Swords className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-cyan-300" />
-          <span className="text-[9px] sm:text-[10px] font-extrabold">
+          <Swords className={`w-3.5 h-3.5 sm:w-4 sm:h-4 ${hud.canAttackGuard ? 'text-amber-200' : 'text-cyan-300'}`} />
+          <span className="text-[9px] sm:text-[10px] font-black">
             {!hud.infiniteTools && hud.backstabCd > 0
               ? `${hud.backstabCd.toFixed(1)}s`
-              : '闷棍'}
+              : '攻击'}
           </span>
-          <span className="hidden sm:inline text-[8px] font-mono text-cyan-300/80">[Space]</span>
+          {hud.canAttackGuard && (
+            <span className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full bg-amber-300 text-black text-[8px] font-black whitespace-nowrap shadow">
+              可敲晕!
+            </span>
+          )}
+          <span className="hidden sm:inline text-[8px] font-mono text-cyan-200/85">[Space]</span>
         </button>
 
         {/* B: Open Tetris Spatial Backpack */}
@@ -516,15 +607,60 @@ export const Raid3DView: React.FC<Raid3DViewProps> = ({
         </button>
       </div>
 
-      {/* Desktop Keyboard Subtle Legend */}
-      <div className="pointer-events-none hidden md:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-10 px-3 py-1 rounded-full bg-black/50 border border-stone-800/80 text-[10px] text-stone-300 gap-3 backdrop-blur-sm">
-        <span><b>WASD</b> 潜行移动</span>
-        <span><b>Shift</b> 疾跑</span>
+      {/* Desktop Keyboard & Mouse Subtle Legend */}
+      <div className="pointer-events-none hidden md:flex absolute bottom-3 left-1/2 -translate-x-1/2 z-10 px-3.5 py-1 rounded-full bg-black/65 border border-amber-500/30 text-[11px] text-amber-100/90 gap-3 backdrop-blur-sm">
+        <span><b>点击地面 / WASD</b> 移动</span>
+        <span><b>Space / J / 点侍卫</b> 攻击敲晕</span>
         <span><b>1</b> 迷魂烟</span>
         <span><b>2</b> 撒碎银引怪</span>
-        <span><b>Space</b> 闷棍击晕</span>
-        <span><b>B</b> 整理包袱</span>
+        <span><b>Shift</b> 疾跑</span>
+        <span><b>B</b> 包袱</span>
       </div>
+
+      {/* 10. FIRST-TIME 3-STEP VISUAL QUICK-START GUIDE (Pauses timer/guards until closed!) */}
+      {guideOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md rounded-2xl wood-panel gold-border-glow p-5 space-y-3.5 text-amber-50">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base sm:text-lg font-black text-amber-300 flex items-center gap-1.5">
+                <Sparkles className="w-5 h-5 text-amber-400" />
+                <span>3 秒上手 · 怎么走、怎么打、怎么赢</span>
+              </h3>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="rounded-xl bg-stone-950/90 border border-amber-500/35 p-3 space-y-1">
+                <div className="font-black text-amber-300 text-sm">① 怎么走？（三种方式全支持）</div>
+                <p className="text-stone-200 leading-relaxed">
+                  直接 <b className="text-white">点击/轻触地面</b> 角色就会自动走过去；也可拖动左下 <b className="text-amber-200">摇杆</b> 或键盘 <b className="text-amber-200">WASD / 方向键</b>。躲开锦衣卫脚下的黄/红灯光！
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-stone-950/90 border border-rose-500/40 p-3 space-y-1">
+                <div className="font-black text-rose-300 text-sm">② 能攻击吗？（近身一棒敲晕！）</div>
+                <p className="text-stone-200 leading-relaxed">
+                  <b className="text-white">能偷袭攻击！</b> 绕近锦衣卫（他脚下亮 <b className="text-rose-300">红圈</b> 时）点右下 <b className="text-amber-300">【攻击】</b>、按 <b className="text-amber-300">Space / J</b> 或直接 <b className="text-amber-300">点他身体</b>，立刻一棒敲晕 <b className="text-cyan-300">9.5 秒</b>！别正面硬撞刀口，危急按 <b className="text-slate-200">迷魂烟</b> 隐身或 <b className="text-amber-200">撒碎银</b> 引开。
+                </p>
+              </div>
+
+              <div className="rounded-xl bg-stone-950/90 border border-emerald-500/40 p-3 space-y-1">
+                <div className="font-black text-emerald-300 text-sm">③ 怎么摸宝赢走银两？</div>
+                <p className="text-stone-200 leading-relaxed">
+                  跟着脚下 <b className="text-amber-300">金箭头</b> 走近发光宝箱或北边 <b className="text-amber-300">金丝楠木暗墙</b> 会 <b className="text-white">自动撬开</b> 装入背包；摸够宝物后跟 <b className="text-emerald-300">绿箭头</b> 跑回南边绿圈 <b className="text-emerald-300">乌篷快船</b> 站 1.5 秒即安全带走！
+                </p>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={dismissGuide}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-400 via-amber-500 to-orange-500 hover:brightness-110 text-black font-black text-sm shadow-lg cursor-pointer"
+            >
+              知道了，开始夜探摸金！
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 10. SPATIAL TETRIS BACKPACK MODAL */}
       <GridBagModal

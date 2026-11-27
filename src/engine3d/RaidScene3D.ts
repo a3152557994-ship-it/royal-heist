@@ -73,6 +73,9 @@ export interface HudSnapshot {
   chestsOpened: number;
   chestsTotal: number;
   guardsKnockedOut: number;
+  hasMoved: boolean;
+  canAttackGuard: boolean;
+  guideGoal: 'move' | 'loot' | 'extract';
 }
 
 export interface RaidSceneCallbacks {
@@ -167,6 +170,18 @@ export class RaidScene3D {
   private extractRingMesh: THREE.Mesh | null = null;
   private fireflies: THREE.Points | null = null;
   private raiderRig: RaiderRig | null = null;
+
+  // Intuitive 3D guidance & combat-clarity visuals (Click-to-Move beacon, 3D Compass Arrow, Attack Lock Ring)
+  private moveTarget: Vec2 | null = null;
+  private moveMarkerGroup: THREE.Group | null = null;
+  private compassArrow: THREE.Mesh | null = null;
+  private targetLockRing: THREE.Mesh | null = null;
+  private raycaster = new THREE.Raycaster();
+  private groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+  private rayHitVec = new THREE.Vector3();
+  private hasMoved = false;
+  private canAttackGuard = false;
+  private moveStuckTimer = 0;
 
   private particles: BurstParticle3D[] = [];
   private smokeClouds: SmokeCloud3D[] = [];
@@ -308,6 +323,9 @@ export class RaidScene3D {
     if (this.mode === 'playing') {
       window.addEventListener('keydown', this.handleKeyDown);
       window.addEventListener('keyup', this.handleKeyUp);
+      this.renderer.domElement.addEventListener('pointerdown', this.handleCanvasPointerDown);
+      this.renderer.domElement.style.cursor = 'pointer';
+      this.createGuidanceMeshes();
       this.emitHud();
     }
 
@@ -332,7 +350,7 @@ export class RaidScene3D {
     if (this.paused || this.finished) return;
     if (k === '1') this.useSmokeBomb();
     else if (k === '2') this.useSilverCoin();
-    else if (k === '3' || k === ' ') {
+    else if (k === '3' || k === ' ' || k === 'j') {
       e.preventDefault();
       this.useBackstab();
     }
@@ -341,6 +359,121 @@ export class RaidScene3D {
   private handleKeyUp = (e: KeyboardEvent) => {
     this.keys.delete(e.key.toLowerCase());
   };
+
+  /**
+   * Click or tap anywhere on the 3D floor to walk there smoothly — OR tap a nearby guard directly to strike!
+   */
+  private handleCanvasPointerDown = (e: PointerEvent) => {
+    if (this.paused || this.finished) return;
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
+    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    this.raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), this.camera);
+    const hit = this.raycaster.ray.intersectPlane(this.groundPlane, this.rayHitVec);
+    if (!hit) return;
+
+    const wx = Math.max(92, Math.min(this.mapConfig.width - 92, this.rayHitVec.x / S));
+    const wy = Math.max(92, Math.min(this.mapConfig.height - 68, this.rayHitVec.z / S));
+
+    // Check if player tapped directly on a non-stunned guard!
+    let clickedGuard: GuardEntity | null = null;
+    for (const gv of this.guardVisuals) {
+      const g = gv.entity;
+      if (g.state === 'stunned') continue;
+      if (Math.hypot(g.x - wx, g.y - wy) < 52) {
+        clickedGuard = g;
+        break;
+      }
+    }
+
+    if (clickedGuard) {
+      const distToGuard = Math.hypot(clickedGuard.x - this.player.x, clickedGuard.y - this.player.y);
+      if (distToGuard <= 122) {
+        this.player.angle = Math.atan2(clickedGuard.y - this.player.y, clickedGuard.x - this.player.x);
+        this.moveTarget = null;
+        this.useBackstab();
+        return;
+      }
+      // Walk toward guard & tell player clearly when to strike
+      this.callbacks.onToast?.('⚔️ 正在贴近侍卫，脚下亮红圈时点【攻击】即可一棒敲晕！', 'cyan');
+    }
+
+    this.moveTarget = { x: wx, y: wy };
+    this.moveStuckTimer = 0;
+    if (this.moveMarkerGroup) {
+      this.moveMarkerGroup.position.set(wx * S, 0.1, wy * S);
+      this.moveMarkerGroup.visible = true;
+    }
+    this.spawnRipple3D(wx, wy, 0xfbbf24, 1.8);
+  };
+
+  private createGuidanceMeshes() {
+    // 1. Click-to-Move Glowing Golden Waypoint Marker
+    const mg = new THREE.Group();
+    const outerRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.36, 0.5, 24),
+      new THREE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    outerRing.rotation.x = -Math.PI / 2;
+    const dot = new THREE.Mesh(
+      new THREE.CircleGeometry(0.14, 16),
+      new THREE.MeshBasicMaterial({
+        color: 0xfef08a,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.95,
+        depthWrite: false,
+      })
+    );
+    dot.rotation.x = -Math.PI / 2;
+    mg.add(outerRing, dot);
+    mg.visible = false;
+    this.scene.add(mg);
+    this.moveMarkerGroup = mg;
+
+    // 2. 3D Floor Compass Chevron orbiting raider's feet (points to nearest chest OR escape boat!)
+    const arrowShape = new THREE.ConeGeometry(0.24, 0.52, 3);
+    arrowShape.rotateX(Math.PI / 2); // tip points along +Z
+    this.compassArrow = new THREE.Mesh(
+      arrowShape,
+      new THREE.MeshBasicMaterial({
+        color: 0xfbbf24,
+        transparent: true,
+        opacity: 0.9,
+        depthWrite: false,
+      })
+    );
+    this.compassArrow.position.set(this.player.x * S, 0.18, this.player.y * S);
+    this.scene.add(this.compassArrow);
+
+    // 3. Blazing Crimson-Cyan Attack Lock Ring under the nearest strikeable guard!
+    this.targetLockRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.76, 1.04, 32),
+      new THREE.MeshBasicMaterial({
+        color: 0xf43f5e,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.92,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    this.targetLockRing.rotation.x = -Math.PI / 2;
+    this.targetLockRing.visible = false;
+    this.scene.add(this.targetLockRing);
+  }
 
   public setMinimapCanvas(canvas: HTMLCanvasElement | null) {
     this.minimapCtx = canvas ? canvas.getContext('2d') : null;
@@ -1055,8 +1188,26 @@ export class RaidScene3D {
     const inf = this.isPro && this.profile.godMode.infiniteTools;
     if (!inf && this.backstabCd > 0) return;
 
-    this.backstabCd = inf ? 0.45 : 3.2;
-    this.player.slashTimer = 0.28;
+    this.moveTarget = null;
+    if (this.moveMarkerGroup) this.moveMarkerGroup.visible = false;
+
+    // Auto-aim snap toward nearest non-stunned guard within 122px so combat feels crisp & intuitive!
+    let nearestTarget: GuardEntity | null = null;
+    let nearestDist = 122;
+    for (const gv of this.guardVisuals) {
+      const g = gv.entity;
+      if (g.state === 'stunned') continue;
+      const d = Math.hypot(g.x - this.player.x, g.y - this.player.y);
+      if (d <= nearestDist) {
+        nearestDist = d;
+        nearestTarget = g;
+      }
+    }
+    if (nearestTarget) {
+      this.player.angle = Math.atan2(nearestTarget.y - this.player.y, nearestTarget.x - this.player.x);
+    }
+
+    this.player.slashTimer = 0.3;
     sound.playBackstab();
 
     // Sub-stepped forward lunge (4×8.5px) so backstab can NEVER tunnel through thin walls or unbroken secret doors!
@@ -1077,20 +1228,25 @@ export class RaidScene3D {
       const g = gv.entity;
       if (g.state === 'stunned') continue;
       const dist = Math.hypot(g.x - this.player.x, g.y - this.player.y);
-      if (dist <= 98) {
+      if (dist <= 112) {
         g.state = 'stunned';
         g.stateTimer = 9.5;
         g.alertMeter = 0;
         knocked += 1;
         this.guardsKnockedOut += 1;
-        this.spawnBurst3D(g.x * S, 1.3, g.y * S, 0x38bdf8, 18, false);
-        this.spawnRipple3D(g.x, g.y, 0x38bdf8, 2.8);
+        this.spawnBurst3D(g.x * S, 1.3, g.y * S, 0x38bdf8, 22, false);
+        this.spawnRipple3D(g.x, g.y, 0x38bdf8, 3.2);
       }
     }
 
     if (knocked > 0) {
-      this.shakeIntensity = 0.42;
-      this.callbacks.onToast?.(`⚡ 背后闷棍得手！击晕 ${knocked} 名锦衣卫 (9.5秒)`, 'cyan');
+      this.backstabCd = inf ? 0.45 : 3.0;
+      this.shakeIntensity = 0.46;
+      this.callbacks.onToast?.(`💥 攻击得手！一棒敲晕 ${knocked} 名锦衣卫 (9.5秒)`, 'cyan');
+    } else {
+      // Short whiff cooldown + crystal-clear player hint so nobody wonders "can I attack?"
+      this.backstabCd = inf ? 0.35 : 0.9;
+      this.callbacks.onToast?.('⚔️ 空挥！靠近锦衣卫（亮红圈时）按【攻击/Space】可一棒敲晕', 'gold');
     }
     this.emitHud();
   }
@@ -1292,13 +1448,31 @@ export class RaidScene3D {
       return;
     }
 
-    // 1. Player Movement (Keyboard WASD/Arrows + Touch Virtual Joystick)
+    // 1. Player Movement (Keyboard WASD/Arrows + Touch Virtual Joystick + Click/Tap-to-Move on 3D Floor!)
     let ix = this.joystickVec.x;
     let iy = this.joystickVec.y;
     if (this.keys.has('w') || this.keys.has('arrowup')) iy -= 1;
     if (this.keys.has('s') || this.keys.has('arrowdown')) iy += 1;
     if (this.keys.has('a') || this.keys.has('arrowleft')) ix -= 1;
     if (this.keys.has('d') || this.keys.has('arrowright')) ix += 1;
+
+    const manualLen = Math.hypot(ix, iy);
+    if (manualLen > 0.08) {
+      // Manual keyboard/joystick cancels click-to-move waypoint cleanly
+      this.moveTarget = null;
+      if (this.moveMarkerGroup) this.moveMarkerGroup.visible = false;
+    } else if (this.moveTarget) {
+      const mdx = this.moveTarget.x - this.player.x;
+      const mdy = this.moveTarget.y - this.player.y;
+      const mdist = Math.hypot(mdx, mdy);
+      if (mdist <= 14) {
+        this.moveTarget = null;
+        if (this.moveMarkerGroup) this.moveMarkerGroup.visible = false;
+      } else {
+        ix = mdx / mdist;
+        iy = mdy / mdist;
+      }
+    }
 
     const len = Math.hypot(ix, iy);
     const moving = len > 0.08;
@@ -1318,6 +1492,8 @@ export class RaidScene3D {
     const speed = 225 * bootsBonus * (1 - encPenalty) * (wantsSprint ? 1.42 : 1.0);
 
     if (moving) {
+      const prevX = this.player.x;
+      const prevY = this.player.y;
       const nx = ix / Math.max(1, len);
       const ny = iy / Math.max(1, len);
       const nextPos = resolveCircleWalls(
@@ -1328,6 +1504,22 @@ export class RaidScene3D {
       this.player.x = Math.max(92, Math.min(this.mapConfig.width - 92, nextPos.x));
       this.player.y = Math.max(92, Math.min(this.mapConfig.height - 68, nextPos.y));
       this.player.angle = Math.atan2(ny, nx);
+
+      if (!this.hasMoved && Math.hypot(this.player.x - this.mapConfig.spawn.x, this.player.y - this.mapConfig.spawn.y) > 36) {
+        this.hasMoved = true;
+      }
+      // If click-to-move gets blocked against a wall for >0.45s, clear marker gracefully
+      if (this.moveTarget) {
+        if (Math.hypot(this.player.x - prevX, this.player.y - prevY) < speed * dt * 0.15) {
+          this.moveStuckTimer += dt;
+          if (this.moveStuckTimer > 0.45) {
+            this.moveTarget = null;
+            if (this.moveMarkerGroup) this.moveMarkerGroup.visible = false;
+          }
+        } else {
+          this.moveStuckTimer = 0;
+        }
+      }
 
       // Sprint footsteps emit sound ripples & lure close guards!
       if (wantsSprint && this.player.stepRippleCd <= 0) {
@@ -1649,6 +1841,72 @@ export class RaidScene3D {
       this.updateGuardConeMesh(gv);
     }
 
+    // 6b. Update 3D Guidance Visuals: Target-Lock Attack Ring + Compass Arrow + Waypoint Pulse
+    let strikeGuard: GuardEntity | null = null;
+    let strikeDist = 122;
+    for (const gv of this.guardVisuals) {
+      const g = gv.entity;
+      if (g.state === 'stunned') continue;
+      const d = Math.hypot(g.x - this.player.x, g.y - this.player.y);
+      if (d <= strikeDist) {
+        strikeDist = d;
+        strikeGuard = g;
+      }
+    }
+    this.canAttackGuard = Boolean(strikeGuard);
+    if (this.targetLockRing) {
+      if (strikeGuard) {
+        this.targetLockRing.visible = true;
+        this.targetLockRing.position.set(strikeGuard.x * S, 0.12, strikeGuard.y * S);
+        const pulse = 0.92 + Math.sin(t * 10) * 0.12;
+        this.targetLockRing.scale.set(pulse, pulse, 1);
+        if (!this.nearPrompt) {
+          this.nearPrompt = '⚔️ 可偷袭攻击！按 [Space] 或点右下【攻击】一棒敲晕侍卫！';
+        }
+      } else {
+        this.targetLockRing.visible = false;
+      }
+    }
+
+    if (this.moveMarkerGroup && this.moveMarkerGroup.visible) {
+      const s = 0.92 + Math.sin(t * 8) * 0.12;
+      this.moveMarkerGroup.scale.set(s, 1, s);
+    }
+
+    // 3D Floor Compass Arrow around player's feet pointing to nearest chest OR escape boat!
+    if (this.compassArrow) {
+      const shouldExtract =
+        this.bag.length > 0 &&
+        (totals.totalValueWan >= 400 ||
+          this.timeLeft <= 28 ||
+          this.chestVisuals.every((c) => c.entity.opened));
+      let goalX = this.mapConfig.extractZone.x;
+      let goalY = this.mapConfig.extractZone.y;
+      if (!shouldExtract) {
+        let bestD = Infinity;
+        for (const cv of this.chestVisuals) {
+          if (cv.entity.opened) continue;
+          const d = Math.hypot(cv.entity.x - this.player.x, cv.entity.y - this.player.y);
+          if (d < bestD) {
+            bestD = d;
+            goalX = cv.entity.x;
+            goalY = cv.entity.y;
+          }
+        }
+      }
+      const gAng = Math.atan2(goalY - this.player.y, goalX - this.player.x);
+      const orbitR = 1.15;
+      this.compassArrow.position.set(
+        this.player.x * S + Math.cos(gAng) * orbitR,
+        0.18 + Math.sin(t * 5) * 0.04,
+        this.player.y * S + Math.sin(gAng) * orbitR
+      );
+      this.compassArrow.rotation.y = Math.atan2(Math.cos(gAng), Math.sin(gAng));
+      (this.compassArrow.material as THREE.MeshBasicMaterial).color.setHex(
+        shouldExtract ? 0x34d399 : 0xfbbf24
+      );
+    }
+
     // 7. Smooth 45° Tactical Follow Camera with Look-Ahead & Impact Shake
     const lookAheadX = Math.cos(this.player.angle) * (moving ? 1.8 : 0.7);
     const lookAheadZ = Math.sin(this.player.angle) * (moving ? 1.8 : 0.7);
@@ -1837,6 +2095,14 @@ export class RaidScene3D {
     const alertCount = this.guardVisuals.filter((g) => g.entity.state === 'chase').length;
     const chestsOpened = this.chestVisuals.filter((c) => c.entity.opened).length;
 
+    const guideGoal: HudSnapshot['guideGoal'] =
+      !this.hasMoved
+        ? 'move'
+        : this.bag.length > 0 &&
+          (totals.totalValueWan >= 400 || this.timeLeft <= 28 || chestsOpened >= this.chestVisuals.length)
+        ? 'extract'
+        : 'loot';
+
     this.callbacks.onHudUpdate({
       hp: this.player.hp,
       maxHp: this.player.maxHp,
@@ -1856,6 +2122,9 @@ export class RaidScene3D {
       chestsOpened,
       chestsTotal: this.chestVisuals.length,
       guardsKnockedOut: this.guardsKnockedOut,
+      hasMoved: this.hasMoved,
+      canAttackGuard: this.canAttackGuard,
+      guideGoal,
     });
   }
 
@@ -1975,6 +2244,7 @@ export class RaidScene3D {
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
     window.removeEventListener('keyup', this.handleKeyUp);
+    this.renderer.domElement.removeEventListener('pointerdown', this.handleCanvasPointerDown);
 
     this.disposeObjectTree(this.scene);
     this.particleGeo.dispose();
