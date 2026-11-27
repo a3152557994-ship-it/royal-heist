@@ -24,19 +24,26 @@ import {
   TREASURES,
 } from '../engine/lootCatalog';
 import { sound } from '../audio/soundEngine';
-import { createPalaceTextureBank, PalaceTextureBank } from './textures3d';
+import { cloneRepeatingTexture, createPalaceTextureBank, PalaceTextureBank } from './textures3d';
+import {
+  buildMoonlitEnvMap,
+  loadRoyalAssetBundle,
+  RoyalAssetBundle,
+} from './assetLoader3d';
 import {
   BrazierRig,
   ChestRig,
   createBrazierRig,
   createChestRig,
   createFoldingScreenMesh,
+  createGardenRockMesh,
   createGuardRig,
   createPalacePillarMesh,
   createPalaceWallMesh,
   createPineTreeMesh,
   createRaiderRig,
   createSecretWallMesh,
+  createStoneLanternMesh,
   createWupengBoatRig,
   GuardRig,
   RaiderRig,
@@ -170,6 +177,11 @@ export class RaidScene3D {
   private extractRingMesh: THREE.Mesh | null = null;
   private fireflies: THREE.Points | null = null;
   private raiderRig: RaiderRig | null = null;
+  private envMap: THREE.Texture | null = null;
+  private propAnchorGroup = new THREE.Group();
+  private pillarWallRefs: { wall: RectWall; obj: THREE.Group }[] = [];
+  private brazierConfigs: [number, number, boolean][] = [];
+  private dockCenter = { x: 0, z: 0, depth: 6.4 };
 
   // Intuitive 3D guidance & combat-clarity visuals (Click-to-Move beacon, 3D Compass Arrow, Attack Lock Ring)
   private moveTarget: Vec2 | null = null;
@@ -272,7 +284,7 @@ export class RaidScene3D {
     });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.2;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -294,23 +306,31 @@ export class RaidScene3D {
     this.camera = new THREE.PerspectiveCamera(44, initW / initH, 0.5, 160);
     this.textures = createPalaceTextureBank(this.renderer);
 
+    this.scene.add(this.propAnchorGroup);
     this.setupLighting();
     this.buildPalaceWorld();
     this.initEntities();
 
-    // Initial camera placement
+    // Stream Blender 5.2 sculpted GLB models + Poly Haven moonlit HDRI (instant if already cached!)
+    loadRoyalAssetBundle().then((bundle) => {
+      if (!this.disposed) {
+        this.applyHighCraftAssets(bundle);
+      }
+    });
+
+    // Initial camera placement (dramatic 45° tactical angle showcasing sculpted 3D silhouettes & PBR reliefs)
     const spX = this.mapConfig.spawn.x * S;
     const spZ = this.mapConfig.spawn.y * S;
     if (this.mode === 'playing') {
-      this.camCurrent.set(spX, 17.5, spZ + 14.5);
-      this.camTarget.set(spX, 0.8, spZ - 1.2);
+      this.camCurrent.set(spX, 14.2, spZ + 13.6);
+      this.camTarget.set(spX, 0.9, spZ - 1.2);
       this.camera.position.copy(this.camCurrent);
       this.camera.lookAt(this.camTarget);
     } else {
       const cx = (this.mapConfig.width * S) / 2;
-      const cz = (this.mapConfig.height * S) * 0.55;
-      this.camCurrent.set(cx + 16, 18.5, cz + 18);
-      this.camTarget.set(cx, 1.0, cz - 4);
+      const cz = (this.mapConfig.height * S) * 0.56;
+      this.camCurrent.set(cx + 13, 14.8, cz + 15.5);
+      this.camTarget.set(cx, 1.0, cz - 3.5);
       this.camera.position.copy(this.camCurrent);
       this.camera.lookAt(this.camTarget);
     }
@@ -617,13 +637,16 @@ export class RaidScene3D {
     outerGround.receiveShadow = true;
     this.scene.add(outerGround);
 
-    // 2. Wet Moonlit Blue-Slate Flagstone Courtyard Floor (real seamless tile_courtyard.webp)
+    // 2. Wet Moonlit Blue-Slate Flagstone Courtyard Floor (Poly Haven CC0 stone_tiles_02 Albedo + Normal + ARM PBR!)
     const courtGeo = new THREE.PlaneGeometry(worldW, worldD);
     const courtMat = new THREE.MeshStandardMaterial({
-      map: this.textures.courtyard,
-      roughness: 0.56,
-      metalness: 0.14,
-      color: 0xcbd5e1,
+      map: this.textures.courtyardPbr.map,
+      normalMap: this.textures.courtyardPbr.normalMap,
+      normalScale: new THREE.Vector2(1.3, 1.3),
+      roughnessMap: this.textures.courtyardPbr.roughnessMap,
+      roughness: 0.58,
+      metalness: 0.16,
+      color: 0x5c6e86,
     });
     const courtMesh = new THREE.Mesh(courtGeo, courtMat);
     courtMesh.rotation.x = -Math.PI / 2;
@@ -639,9 +662,7 @@ export class RaidScene3D {
       const vaultCX = (secWall.x + secWall.w / 2) * S;
       const vaultCZ = (95 + (secWall.y - 95) / 2) * S;
 
-      const carpetTex = this.textures.carpet.clone();
-      carpetTex.needsUpdate = true;
-      carpetTex.repeat.set(3, 2);
+      const carpetTex = cloneRepeatingTexture(this.textures.carpet, 3, 2);
 
       const vaultCarpet = new THREE.Mesh(
         new THREE.PlaneGeometry(vaultW, vaultD),
@@ -672,9 +693,7 @@ export class RaidScene3D {
     // Center Hall Ceremonial Red Carpet Runner
     const runnerW = 6.2;
     const runnerD = 12.5;
-    const runnerTex = this.textures.carpet.clone();
-    runnerTex.needsUpdate = true;
-    runnerTex.repeat.set(1, 2);
+    const runnerTex = cloneRepeatingTexture(this.textures.carpet, 1, 2);
     const runner = new THREE.Mesh(
       new THREE.PlaneGeometry(runnerW, runnerD),
       new THREE.MeshStandardMaterial({
@@ -707,15 +726,19 @@ export class RaidScene3D {
     waterMesh.receiveShadow = true;
     this.scene.add(waterMesh);
 
-    // Carved Stone Embankment Lip along the North Edge of Canal
+    // Carved Stone Embankment Lip along the North Edge of Canal (Poly Haven marble_01 PBR)
     const dockHalfW = 148 * S;
     const dockCX = m.extractZone.x * S;
     const dockCZ = (m.extractZone.y - 18) * S;
     const dockD = 6.4;
+    this.dockCenter = { x: dockCX, z: dockCZ, depth: dockD };
 
     const stoneMat = new THREE.MeshStandardMaterial({
-      map: this.textures.marbleBase,
-      roughness: 0.65,
+      map: this.textures.marblePbr.map,
+      normalMap: this.textures.marblePbr.normalMap,
+      roughnessMap: this.textures.marblePbr.roughnessMap,
+      color: 0xcbd0d6,
+      roughness: 0.62,
     });
     const leftBankW = dockCX - dockHalfW - 40 * S;
     if (leftBankW > 0.5) {
@@ -735,11 +758,15 @@ export class RaidScene3D {
       this.scene.add(rb);
     }
 
-    // Wooden Pier Deck jutting out over the Canal for the Escape Boat
+    // Wooden Pier Deck jutting out over the Canal (Poly Haven weathered_brown_planks PBR!)
     const pier = new THREE.Mesh(
       new THREE.BoxGeometry(dockHalfW * 2, 0.28, dockD),
       new THREE.MeshStandardMaterial({
-        map: this.textures.woodDeck,
+        map: this.textures.woodPbr.map,
+        normalMap: this.textures.woodPbr.normalMap,
+        normalScale: new THREE.Vector2(1.1, 1.1),
+        roughnessMap: this.textures.woodPbr.roughnessMap,
+        color: 0xb89b82,
         roughness: 0.78,
       })
     );
@@ -809,6 +836,7 @@ export class RaidScene3D {
         mesh = createFoldingScreenMesh(ww, wd, this.textures);
       } else if (w.kind === 'pillar') {
         mesh = createPalacePillarMesh(ww, wd, this.textures);
+        this.pillarWallRefs.push({ wall: w, obj: mesh });
       } else {
         mesh = createSecretWallMesh(ww, wd, this.textures);
         this.secretWallMeshes.set(w.id, mesh);
@@ -818,7 +846,7 @@ export class RaidScene3D {
     }
 
     // 6. Strategic Warm Bronze Braziers (placed cleanly at safe non-blocking architectural corners!)
-    const brazierSpots: [number, number, boolean][] = [
+    this.brazierConfigs = [
       // Flanking the Pier Entrance
       [m.extractZone.x - 165, canalTopY / S - 36, true],
       [m.extractZone.x + 165, canalTopY / S - 36, true],
@@ -834,14 +862,14 @@ export class RaidScene3D {
       [m.width - 130, 140, false],
     ];
 
-    for (const [bx, by, withLight] of brazierSpots) {
+    for (const [bx, by, withLight] of this.brazierConfigs) {
       const b = createBrazierRig(this.textures, withLight);
       b.root.position.set(bx * S, 0, by * S);
       this.scene.add(b.root);
       this.braziers.push(b);
     }
 
-    // 7. Perimeter Moonlit Pine Trees outside the Outer Palace Walls (framing depth!)
+    // 7. Perimeter Moonlit Pine Trees outside the Outer Palace Walls (swapped to sculpted GLBs on load!)
     const treeCoords: [number, number, number][] = [
       [-60, 220, 1.1],
       [-75, 620, 1.3],
@@ -857,7 +885,7 @@ export class RaidScene3D {
       const tree = createPineTreeMesh();
       tree.position.set(tx * S, 0, ty * S);
       tree.scale.setScalar(sc);
-      this.scene.add(tree);
+      this.propAnchorGroup.add(tree);
     }
 
     // 8. Atmospheric Drifting Midnight Fireflies / Gold Embers
@@ -994,6 +1022,162 @@ export class RaidScene3D {
     this.scene.add(this.raiderRig.root);
   }
 
+  /**
+   * Seamlessly upgrades the live 3D scene to Blender 5.2 sculpted GLB models + Poly Haven moonlit HDRI IBL
+   * while preserving every active gameplay coordinate, patrol state, opened chest lid, and inventory item!
+   */
+  private applyHighCraftAssets(bundle: RoyalAssetBundle) {
+    if (this.disposed) return;
+
+    // 1. Real Poly Haven CC0 Moonlit Night Sky PMREM reflections on all gold/lacquer/steel/water PBR surfaces!
+    const env = buildMoonlitEnvMap(this.renderer, bundle);
+    if (env) {
+      this.envMap?.dispose();
+      this.envMap = env;
+      this.scene.environment = env;
+      this.scene.environmentIntensity = 0.72;
+    }
+
+    // 2. Upgrade Night Raider Hero Rig
+    if (this.raiderRig) {
+      const oldPos = this.raiderRig.root.position.clone();
+      const oldRotY = this.raiderRig.root.rotation.y;
+      this.scene.remove(this.raiderRig.root);
+      this.disposeObjectTree(this.raiderRig.root);
+      this.raiderRig = createRaiderRig(
+        this.textures,
+        this.profile.upgrades.armorLevel,
+        this.profile.upgrades.bootsLevel,
+        bundle
+      );
+      this.raiderRig.root.position.copy(oldPos);
+      this.raiderRig.root.rotation.y = oldRotY;
+      this.scene.add(this.raiderRig.root);
+      this.updateLootSackVisual();
+    }
+
+    // 3. Upgrade All Jinyiwei Patrol & Elite Guards
+    this.guardVisuals.forEach((gv, idx) => {
+      const oldPos = gv.rig.root.position.clone();
+      const oldRotY = gv.rig.root.rotation.y;
+      this.scene.remove(gv.rig.root);
+      this.disposeObjectTree(gv.rig.root);
+      const nextRig = createGuardRig(this.textures, gv.entity.elite, idx < 3, bundle);
+      nextRig.root.position.copy(oldPos);
+      nextRig.root.rotation.y = oldRotY;
+      this.scene.add(nextRig.root);
+      gv.rig = nextRig;
+    });
+
+    // 4. Upgrade All Treasure Chests (preserving opened state & lid rotation!)
+    const xrayOn = this.isPro && this.profile.godMode.xrayMythicVision;
+    for (const cv of this.chestVisuals) {
+      const oldPos = cv.rig.root.position.clone();
+      const oldRotY = cv.rig.root.rotation.y;
+      const def = TREASURES[cv.entity.lootDefId];
+      const rarityHex = RARITY_HEX[def?.rarity || 'common'] || 0xfbbf24;
+      this.scene.remove(cv.rig.root);
+      this.disposeObjectTree(cv.rig.root);
+      const nextRig = createChestRig(cv.entity.tier, rarityHex, bundle);
+      nextRig.root.position.copy(oldPos);
+      nextRig.root.rotation.y = oldRotY;
+      if (cv.entity.opened) {
+        nextRig.innerGlow.visible = true;
+        nextRig.beamMesh.visible = true;
+        nextRig.lidPivot.rotation.x = cv.lidAngle;
+      } else if (xrayOn && (def?.rarity === 'mythic' || def?.rarity === 'legendary')) {
+        nextRig.xrayBeacon.visible = true;
+      }
+      this.scene.add(nextRig.root);
+      cv.rig = nextRig;
+    }
+
+    // 5. Upgrade Palace Columns (Dougong + Hanging Hexagonal Palace Lanterns)
+    for (const ref of this.pillarWallRefs) {
+      const w = ref.wall;
+      this.scene.remove(ref.obj);
+      this.disposeObjectTree(ref.obj);
+      const nextPillar = createPalacePillarMesh(w.w * S, w.h * S, this.textures, bundle);
+      nextPillar.position.set((w.x + w.w / 2) * S, 0, (w.y + w.h / 2) * S);
+      this.scene.add(nextPillar);
+      ref.obj = nextPillar;
+    }
+
+    // 6. Upgrade Bronze Tripod Braziers
+    for (const b of this.braziers) {
+      this.scene.remove(b.root);
+      this.disposeObjectTree(b.root);
+    }
+    this.braziers = [];
+    for (const [bx, by, withLight] of this.brazierConfigs) {
+      const b = createBrazierRig(this.textures, withLight, bundle);
+      b.root.position.set(bx * S, 0, by * S);
+      this.scene.add(b.root);
+      this.braziers.push(b);
+    }
+
+    // 7. Upgrade Moored Wupeng Escape Boat
+    if (this.boatGroup) {
+      this.scene.remove(this.boatGroup);
+      this.disposeObjectTree(this.boatGroup);
+    }
+    this.boatGroup = createWupengBoatRig(this.textures, bundle);
+    this.boatGroup.position.set(this.dockCenter.x, 0.08, this.dockCenter.z + this.dockCenter.depth / 2 + 1.32);
+    this.scene.add(this.boatGroup);
+
+    // 8. Populate Sculpted Qing Courtyard Ancient Pines + Poly Haven CC0 Mossy Garden Rocks + Carved Stone Lanterns
+    this.disposeObjectTree(this.propAnchorGroup);
+    this.propAnchorGroup.clear();
+    const m = this.mapConfig;
+    const treeCoords: [number, number, number, number][] = [
+      [-60, 220, 1.15, 0.4],
+      [-75, 620, 1.35, 1.7],
+      [-55, 960, 1.0, 2.8],
+      [m.width + 65, 260, 1.25, 0.9],
+      [m.width + 80, 680, 1.1, 2.1],
+      [m.width + 60, 980, 1.3, 3.6],
+      [280, -65, 1.35, 1.2],
+      [m.width / 2, -80, 1.45, 2.6],
+      [m.width - 280, -65, 1.25, 0.2],
+    ];
+    for (const [tx, ty, sc, rotY] of treeCoords) {
+      const tree = createPineTreeMesh(bundle);
+      tree.position.set(tx * S, 0, ty * S);
+      tree.rotation.y = rotY;
+      tree.scale.setScalar(sc);
+      this.propAnchorGroup.add(tree);
+    }
+
+    // Poly Haven CC0 Mossy Garden Rockery framing outer courtyard & canal embankments
+    const rockCoords: [number, number, number, number][] = [
+      [-32, 380, 1.2, 0.5],
+      [-45, 810, 1.5, 2.2],
+      [m.width + 38, 440, 1.35, 1.4],
+      [m.width + 42, 850, 1.45, 3.8],
+      [160, -45, 1.4, 0.8],
+      [m.width - 160, -45, 1.3, 2.9],
+    ];
+    for (const [rx, ry, sc, rotY] of rockCoords) {
+      const rock = createGardenRockMesh(bundle);
+      if (rock) {
+        rock.position.set(rx * S, -0.05, ry * S);
+        rock.rotation.y = rotY;
+        rock.scale.setScalar(sc);
+        this.propAnchorGroup.add(rock);
+      }
+    }
+
+    // Carved Granite Palace Stone Lanterns flanking canal embankments cleanly outside walkable path
+    const canalTopY = (m.id === 'salt_office' ? 980 : m.id === 'heshen_manor' ? 1130 : 1170) * S;
+    for (const lx of [86 * S, (m.width - 86) * S]) {
+      const sl = createStoneLanternMesh(this.textures, bundle);
+      if (sl) {
+        sl.position.set(lx, 0, canalTopY - 0.85);
+        this.propAnchorGroup.add(sl);
+      }
+    }
+  }
+
   private updateGuardConeMesh(gv: GuardVisual) {
     const g = gv.entity;
     if (g.state === 'stunned') {
@@ -1070,11 +1254,16 @@ export class RaidScene3D {
     if (!this.raiderRig) return;
     const totals = computeBagTotals(this.bag);
     const ratio = Math.min(1, totals.totalValueWan / 2600);
-    const scale = 0.45 + ratio * 0.95;
+    const scale = 0.55 + ratio * 0.85;
     this.raiderRig.lootSack.scale.setScalar(scale);
 
-    const sackMesh = this.raiderRig.lootSack.children[0] as THREE.Mesh;
-    const mat = sackMesh.material as THREE.MeshStandardMaterial;
+    const sackNode = this.raiderRig.lootSack;
+    const sackMesh =
+      (sackNode as THREE.Mesh).isMesh
+        ? (sackNode as THREE.Mesh)
+        : (sackNode.children.find((c) => (c as THREE.Mesh).isMesh) as THREE.Mesh | undefined);
+    const mat = sackMesh?.material as THREE.MeshStandardMaterial | undefined;
+    if (!mat || !mat.color) return;
     if (totals.mythicCount > 0) {
       mat.color.setHex(0xb91c1c);
       mat.emissive.setHex(0x9f1239);
@@ -1426,12 +1615,12 @@ export class RaidScene3D {
 
     // Cinematic gentle aerial sweep over the Moonlit Qing Palace Courtyard!
     const cx = (this.mapConfig.width * S) / 2;
-    const cz = (this.mapConfig.height * S) * 0.56;
-    const camX = cx + Math.sin(t * 0.18) * 12.5;
-    const camZ = cz + 17.5 + Math.cos(t * 0.14) * 5.2;
-    const camY = 16.5 + Math.sin(t * 0.22) * 1.4;
+    const cz = (this.mapConfig.height * S) * 0.58;
+    const camX = cx + Math.sin(t * 0.18) * 10.5;
+    const camZ = cz + 14.8 + Math.cos(t * 0.14) * 4.2;
+    const camY = 13.6 + Math.sin(t * 0.22) * 1.1;
     this.camera.position.set(camX, camY, camZ);
-    this.camera.lookAt(cx + Math.sin(t * 0.18) * 2.5, 0.8, cz - 5.5);
+    this.camera.lookAt(cx + Math.sin(t * 0.18) * 2.2, 0.9, cz - 4.5);
   }
 
   private stepGameplay(dt: number, t: number) {
@@ -1917,8 +2106,8 @@ export class RaidScene3D {
     );
     const desiredCam = new THREE.Vector3(
       desiredTarget.x,
-      16.2,
-      desiredTarget.z + 13.5
+      13.8,
+      desiredTarget.z + 13.0
     );
     this.camTarget.lerp(desiredTarget, Math.min(1, dt * 7.5));
     this.camCurrent.lerp(desiredCam, Math.min(1, dt * 6.5));
@@ -2210,6 +2399,20 @@ export class RaidScene3D {
   private disposeObjectTree(root: THREE.Object3D) {
     const sharedTextures = new Set<THREE.Texture>([
       this.textures.courtyard,
+      this.textures.courtyardPbr.map,
+      this.textures.courtyardPbr.normalMap,
+      this.textures.courtyardPbr.roughnessMap,
+      this.textures.woodPbr.map,
+      this.textures.woodPbr.normalMap,
+      this.textures.woodPbr.roughnessMap,
+      this.textures.roofPbr.map,
+      this.textures.roofPbr.normalMap,
+      this.textures.roofPbr.roughnessMap,
+      this.textures.marblePbr.map,
+      this.textures.marblePbr.normalMap,
+      this.textures.marblePbr.roughnessMap,
+      this.textures.plasterNor,
+      this.textures.plasterArm,
       this.textures.carpet,
       this.textures.water,
       this.textures.roof,
@@ -2223,14 +2426,16 @@ export class RaidScene3D {
     ]);
     root.traverse((obj) => {
       const m = obj as THREE.Mesh | THREE.Points | THREE.Sprite;
-      if ('geometry' in m && m.geometry) {
+      if ('geometry' in m && m.geometry && !obj.userData.sharedAssetGeo) {
         m.geometry.dispose();
       }
-      if ('material' in m && m.material) {
+      if ('material' in m && m.material && !obj.userData.sharedAssetMat) {
         const mats = Array.isArray(m.material) ? m.material : [m.material];
         for (const mt of mats) {
           const std = mt as THREE.MeshStandardMaterial;
           if (std.map && !sharedTextures.has(std.map)) std.map.dispose();
+          if (std.normalMap && !sharedTextures.has(std.normalMap)) std.normalMap.dispose();
+          if (std.roughnessMap && !sharedTextures.has(std.roughnessMap)) std.roughnessMap.dispose();
           mt.dispose();
         }
       }
@@ -2247,6 +2452,8 @@ export class RaidScene3D {
     this.renderer.domElement.removeEventListener('pointerdown', this.handleCanvasPointerDown);
 
     this.disposeObjectTree(this.scene);
+    this.envMap?.dispose();
+    this.envMap = null;
     this.particleGeo.dispose();
     this.sparkGeo.dispose();
     this.coinGeo.dispose();

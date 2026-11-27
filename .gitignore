@@ -4,3 +4,9 @@ dist-pure/
 .DS_Store
 release/*KEYS*
 release/*.secret*
+art/*.blend
+art/*.blend1
+art/*.glb
+art/vendor/*
+!art/vendor/SOURCES.json
+evidence/
