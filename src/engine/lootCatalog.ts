@@ -1,4 +1,5 @@
 import { BagItem, Rarity, TreasureDef } from '../types/raid';
+import { getTreasureImg } from './spriteAtlas';
 
 export const RARITY_META: Record<
   Rarity,
@@ -283,8 +284,23 @@ export function computeBagTotals(bag: BagItem[]): { totalValueWan: number; total
   };
 }
 
+const ICON_TO_DEF_ID: Record<TreasureDef['iconType'], string> = {
+  silver_ingot: 'silver_ingot',
+  pearl: 'night_pearl',
+  jade_ruyi: 'jade_ruyi',
+  porcelain_vase: 'porcelain_vase',
+  gold_abacus: 'gold_abacus',
+  emerald_cabbage: 'emerald_cabbage',
+  dragon_cup: 'dragon_cup',
+  phoenix_crown: 'phoenix_crown',
+  gold_buddha: 'gold_buddha',
+  imperial_seal: 'imperial_seal',
+  guard_token: 'guard_token',
+  secret_ledger: 'secret_ledger',
+};
+
 /**
- * Draws crisp vector treasure art on Canvas (both in-world dropped items, Grid UI, and Share Poster!)
+ * Draws real high-resolution painted museum antique art on Canvas (zero geometric placeholder shapes!)
  */
 export function drawTreasureIcon(
   ctx: CanvasRenderingContext2D,
@@ -293,169 +309,15 @@ export function drawTreasureIcon(
   cy: number,
   size: number
 ) {
+  const defId = ICON_TO_DEF_ID[iconType] || iconType;
+  const img = getTreasureImg(defId);
   ctx.save();
   ctx.translate(cx, cy);
-  const r = size * 0.42;
-
-  switch (iconType) {
-    case 'silver_ingot': {
-      ctx.fillStyle = '#E2E8F0';
-      ctx.strokeStyle = '#94A3B8';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-r, -r * 0.2);
-      ctx.quadraticCurveTo(-r * 0.6, -r * 0.85, 0, -r * 0.35);
-      ctx.quadraticCurveTo(r * 0.6, -r * 0.85, r, -r * 0.2);
-      ctx.lineTo(r * 0.72, r * 0.65);
-      ctx.lineTo(-r * 0.72, r * 0.65);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      break;
-    }
-    case 'pearl': {
-      const g = ctx.createRadialGradient(-r * 0.25, -r * 0.25, r * 0.1, 0, 0, r * 0.85);
-      g.addColorStop(0, '#FFFFFF');
-      g.addColorStop(0.5, '#BAE6FD');
-      g.addColorStop(1, '#0284C7');
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.arc(0, 0, r * 0.78, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    }
-    case 'porcelain_vase': {
-      ctx.fillStyle = '#EFF6FF';
-      ctx.strokeStyle = '#1D4ED8';
-      ctx.lineWidth = 2.5;
-      ctx.beginPath();
-      ctx.ellipse(0, r * 0.2, r * 0.58, r * 0.78, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillStyle = '#2563EB';
-      ctx.fillRect(-r * 0.28, -r * 0.85, r * 0.56, r * 0.34);
-      break;
-    }
-    case 'jade_ruyi': {
-      ctx.strokeStyle = '#34D399';
-      ctx.lineWidth = Math.max(4, size * 0.12);
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(-r * 0.8, r * 0.35);
-      ctx.quadraticCurveTo(0, -r * 0.45, r * 0.75, -r * 0.15);
-      ctx.stroke();
-      ctx.fillStyle = '#6EE7B7';
-      ctx.beginPath();
-      ctx.arc(r * 0.72, -r * 0.2, r * 0.35, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    }
-    case 'gold_abacus': {
-      ctx.fillStyle = '#F59E0B';
-      ctx.strokeStyle = '#FEF3C7';
-      ctx.lineWidth = 2;
-      ctx.fillRect(-r * 0.9, -r * 0.55, r * 1.8, r * 1.1);
-      ctx.strokeRect(-r * 0.9, -r * 0.55, r * 1.8, r * 1.1);
-      ctx.fillStyle = '#451A03';
-      ctx.fillRect(-r * 0.74, -r * 0.38, r * 1.48, r * 0.76);
-      ctx.fillStyle = '#FCD34D';
-      for (let i = -2; i <= 2; i++) {
-        ctx.beginPath();
-        ctx.arc(i * r * 0.28, -r * 0.14, r * 0.1, 0, Math.PI * 2);
-        ctx.arc(i * r * 0.28, r * 0.16, r * 0.1, 0, Math.PI * 2);
-        ctx.fill();
-      }
-      break;
-    }
-    case 'emerald_cabbage': {
-      ctx.fillStyle = '#F8FAFC';
-      ctx.beginPath();
-      ctx.ellipse(0, r * 0.35, r * 0.55, r * 0.48, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#10B981';
-      ctx.beginPath();
-      ctx.arc(-r * 0.25, -r * 0.22, r * 0.45, 0, Math.PI * 2);
-      ctx.arc(r * 0.25, -r * 0.18, r * 0.42, 0, Math.PI * 2);
-      ctx.arc(0, -r * 0.42, r * 0.44, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    }
-    case 'dragon_cup': {
-      ctx.fillStyle = '#FBBF24';
-      ctx.strokeStyle = '#FEF08A';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(-r * 0.55, -r * 0.75);
-      ctx.lineTo(r * 0.55, -r * 0.75);
-      ctx.lineTo(r * 0.32, r * 0.35);
-      ctx.lineTo(-r * 0.32, r * 0.35);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      ctx.fillRect(-r * 0.14, r * 0.35, r * 0.28, r * 0.45);
-      ctx.fillStyle = '#EF4444';
-      ctx.beginPath();
-      ctx.arc(0, -r * 0.25, r * 0.18, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    }
-    case 'phoenix_crown': {
-      ctx.fillStyle = '#F59E0B';
-      ctx.beginPath();
-      ctx.moveTo(-r * 0.82, r * 0.45);
-      ctx.lineTo(-r * 0.62, -r * 0.45);
-      ctx.lineTo(-r * 0.2, 0);
-      ctx.lineTo(0, -r * 0.8);
-      ctx.lineTo(r * 0.2, 0);
-      ctx.lineTo(r * 0.62, -r * 0.45);
-      ctx.lineTo(r * 0.82, r * 0.45);
-      ctx.closePath();
-      ctx.fill();
-      ctx.fillStyle = '#F43F5E';
-      ctx.beginPath();
-      ctx.arc(0, -r * 0.25, r * 0.22, 0, Math.PI * 2);
-      ctx.fill();
-      break;
-    }
-    case 'gold_buddha': {
-      ctx.fillStyle = '#FBBF24';
-      ctx.strokeStyle = '#FDE68A';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(0, -r * 0.48, r * 0.34, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(-r * 0.72, r * 0.75);
-      ctx.quadraticCurveTo(0, -r * 0.35, r * 0.72, r * 0.75);
-      ctx.closePath();
-      ctx.fill();
-      ctx.stroke();
-      break;
-    }
-    case 'imperial_seal': {
-      // Mythic Heirloom Jade Seal with golden dragon knob & crimson stamp base!
-      ctx.fillStyle = '#10B981';
-      ctx.strokeStyle = '#FBBF24';
-      ctx.lineWidth = 3;
-      ctx.fillRect(-r * 0.72, -r * 0.15, r * 1.44, r * 0.82);
-      ctx.strokeRect(-r * 0.72, -r * 0.15, r * 1.44, r * 0.82);
-      ctx.fillStyle = '#EF4444';
-      ctx.fillRect(-r * 0.72, r * 0.48, r * 1.44, r * 0.22);
-      ctx.fillStyle = '#FBBF24';
-      ctx.beginPath();
-      ctx.arc(0, -r * 0.38, r * 0.42, Math.PI, 0);
-      ctx.fill();
-      break;
-    }
-    default: {
-      ctx.fillStyle = '#FDE68A';
-      ctx.fillRect(-r * 0.65, -r * 0.5, r * 1.3, r);
-      ctx.strokeStyle = '#B45309';
-      ctx.lineWidth = 2;
-      ctx.strokeRect(-r * 0.65, -r * 0.5, r * 1.3, r);
-      break;
-    }
+  if (img && img.complete && img.naturalWidth > 0) {
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+    ctx.shadowBlur = 8;
+    ctx.shadowOffsetY = 3;
+    ctx.drawImage(img, -size / 2, -size / 2, size, size);
   }
   ctx.restore();
 }

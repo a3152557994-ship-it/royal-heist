@@ -29,6 +29,7 @@ import {
   rollTreasureForChest,
   TREASURES,
 } from '../engine/lootCatalog';
+import { getSpriteImg, getTilePattern, preloadGameAtlas } from '../engine/spriteAtlas';
 import { formatSilver } from '../engine/gameData';
 import { sound } from '../audio/soundEngine';
 import { GridBagModal } from './GridBagModal';
@@ -152,6 +153,7 @@ export const RaidActionView: React.FC<RaidActionViewProps> = ({
   }, [bagOpen, revivePrompt]);
 
   useEffect(() => {
+    preloadGameAtlas();
     const t = window.setTimeout(() => setBannerAlert(null), 4200);
     return () => clearTimeout(t);
   }, []);
@@ -362,6 +364,21 @@ export const RaidActionView: React.FC<RaidActionViewProps> = ({
 
         if (mLen > 0.05) {
           s.player.angle = Math.atan2(my, mx);
+        }
+        s.player.vx = mx * moveSpeed;
+        s.player.vy = my * moveSpeed;
+        // Kick up subtle courtyard dust puffs while sprinting
+        if (mLen > 0.25 && Math.random() < 0.28) {
+          s.particles.push({
+            x: s.player.x + (Math.random() - 0.5) * 12,
+            y: s.player.y + 22,
+            vx: -mx * 24 + (Math.random() - 0.5) * 16,
+            vy: -my * 18 - Math.random() * 12,
+            color: 'rgba(214, 211, 209, 0.35)',
+            size: 3 + Math.random() * 3,
+            life: 0.32,
+            maxLife: 0.32,
+          });
         }
         const nextPos = resolveCircleWalls(
           {
@@ -613,7 +630,7 @@ export const RaidActionView: React.FC<RaidActionViewProps> = ({
         }
       }
 
-      // ================= RENDER 60FPS SCENE =================
+      // ================= RENDER 60FPS 2.5D ORIENTAL NOIR SCENE =================
       const cvs = canvasRef.current;
       if (cvs) {
         const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -632,306 +649,458 @@ export const RaidActionView: React.FC<RaidActionViewProps> = ({
         const camX = Math.max(0, Math.min(mapCfg.width - vw, s.player.x - vw / 2));
         const camY = Math.max(0, Math.min(mapCfg.height - vh, s.player.y - vh / 2));
 
-        ctx.fillStyle = '#090706';
+        ctx.fillStyle = '#0D1015';
         ctx.fillRect(0, 0, vw, vh);
 
         ctx.save();
         ctx.translate(-camX, -camY);
 
-        // A. Courtyard Flagstone Grid
-        ctx.strokeStyle = 'rgba(217, 179, 130, 0.055)';
-        ctx.lineWidth = 1;
-        const tile = 64;
-        for (let x = 0; x <= mapCfg.width; x += tile) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, mapCfg.height);
-          ctx.stroke();
-        }
-        for (let y = 0; y <= mapCfg.height; y += tile) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(mapCfg.width, y);
-          ctx.stroke();
+        // A. Real Seamless Palace Bluestone Courtyard & Imperial Dragon Carpets
+        const stonePat = getTilePattern(ctx, 'tile_courtyard');
+        if (stonePat) {
+          ctx.fillStyle = stonePat;
+          ctx.fillRect(0, 0, mapCfg.width, mapCfg.height);
+        } else {
+          ctx.fillStyle = '#151921';
+          ctx.fillRect(0, 0, mapCfg.width, mapCfg.height);
         }
 
-        // Palace Inner Vault Red Carpet Floor Highlight
-        ctx.fillStyle = 'rgba(127, 29, 29, 0.22)';
-        ctx.fillRect(480, 105, mapCfg.width - 960, 290);
+        // Ornate Imperial Dragon Carpet in North Vault & Side Chambers
+        const carpetPat = getTilePattern(ctx, 'tile_carpet');
+        const drawCarpetZone = (rx: number, ry: number, rw: number, rh: number) => {
+          ctx.save();
+          if (carpetPat) {
+            ctx.fillStyle = carpetPat;
+          } else {
+            ctx.fillStyle = '#3B0D11';
+          }
+          ctx.fillRect(rx, ry, rw, rh);
+          ctx.strokeStyle = 'rgba(245, 185, 75, 0.55)';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(rx + 3, ry + 3, rw - 6, rh - 6);
+          ctx.restore();
+        };
+        drawCarpetZone(485, 92, mapCfg.width - 970, 296);
+        drawCarpetZone(135, 670, 385, 290);
+        drawCarpetZone(mapCfg.width - 520, 670, 385, 290);
 
-        // B. Extraction Boat & Glowing Canal Zone
+        // B. Canal Water & Moored Wupeng Escape Boat
+        const waterPat = getTilePattern(ctx, 'tile_water');
+        for (const w of s.walls) {
+          if (w.kind !== 'water') continue;
+          ctx.save();
+          ctx.fillStyle = waterPat || '#071923';
+          ctx.fillRect(w.x, w.y, w.w, w.h);
+          // Carved white-marble quay coping edge along north bank
+          ctx.fillStyle = '#292524';
+          ctx.fillRect(w.x, w.y, w.w, 10);
+          ctx.strokeStyle = 'rgba(148, 163, 184, 0.45)';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(w.x, w.y, w.w, 10);
+          ctx.restore();
+        }
+
         const ez = mapCfg.extractZone;
-        const pulse = 0.7 + 0.3 * Math.sin(ts / 220);
+        const pulse = 0.72 + 0.28 * Math.sin(ts / 240);
         ctx.save();
+        const ezGrad = ctx.createRadialGradient(ez.x, ez.y, 12, ez.x, ez.y, ez.radius);
+        if (s.bagRef.length > 0) {
+          ezGrad.addColorStop(0, `rgba(16, 185, 129, ${0.32 * pulse})`);
+          ezGrad.addColorStop(1, 'rgba(16, 185, 129, 0.03)');
+        } else {
+          ezGrad.addColorStop(0, 'rgba(245, 158, 11, 0.14)');
+          ezGrad.addColorStop(1, 'rgba(245, 158, 11, 0)');
+        }
+        ctx.fillStyle = ezGrad;
         ctx.beginPath();
         ctx.arc(ez.x, ez.y, ez.radius, 0, Math.PI * 2);
-        ctx.fillStyle = s.bagRef.length > 0 ? `rgba(16, 185, 129, ${0.18 * pulse})` : 'rgba(120, 113, 108, 0.1)';
         ctx.fill();
-        ctx.lineWidth = 3;
+        ctx.lineWidth = 2.5;
         ctx.setLineDash([10, 6]);
-        ctx.strokeStyle = s.bagRef.length > 0 ? '#10B981' : '#78716C';
+        ctx.strokeStyle = s.bagRef.length > 0 ? '#34D399' : 'rgba(245, 185, 75, 0.45)';
         ctx.stroke();
         ctx.restore();
 
-        // Draw Wooden Canal Escape Boat
+        // Real Painted Wupeng Escape Boat Sprite with gently bobbing bow lantern
+        const boatImg = getSpriteImg('boat');
+        const boatBob = Math.sin(ts / 420) * 3.5;
         ctx.save();
-        ctx.translate(ez.x, ez.y + 18 + Math.sin(ts / 450) * 3);
-        ctx.fillStyle = '#451A03';
-        ctx.strokeStyle = '#F59E0B';
+        ctx.translate(ez.x, ez.y + 18 + boatBob);
+        // Subtle water ripple ring under hull
+        ctx.strokeStyle = 'rgba(125, 211, 252, 0.24)';
         ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.ellipse(0, 0, 56, 20, 0, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.ellipse(0, 12, 74 + Math.sin(ts / 320) * 5, 24, 0, 0, Math.PI * 2);
         ctx.stroke();
-        // Boat warm lantern
-        ctx.fillStyle = '#FBBF24';
+        if (boatImg) {
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+          ctx.shadowBlur = 14;
+          ctx.shadowOffsetY = 8;
+          ctx.drawImage(boatImg, -84, -68, 168, 136);
+        }
+        // Warm golden lantern bloom at boat bow
+        const bowGlow = ctx.createRadialGradient(-56, 26, 2, -56, 26, 48);
+        bowGlow.addColorStop(0, 'rgba(253, 224, 71, 0.55)');
+        bowGlow.addColorStop(1, 'rgba(251, 191, 36, 0)');
+        ctx.fillStyle = bowGlow;
         ctx.beginPath();
-        ctx.arc(38, -6, 6, 0, Math.PI * 2);
+        ctx.arc(-56, 26, 48, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
 
-        // C. Walls, Water, Screens & Secret Crackable Walls
+        // C. 2.5D Palace Walls, Tubular Tile Roofs, Vermilion Pillars, Screens & Secret Nanmu Wall
+        const roofPat = getTilePattern(ctx, 'tile_roof');
         for (const w of s.walls) {
-          if (w.broken) continue;
-          if (w.kind === 'water') {
-            ctx.fillStyle = '#081C24';
-            ctx.fillRect(w.x, w.y, w.w, w.h);
-            ctx.strokeStyle = 'rgba(56, 189, 248, 0.22)';
-            ctx.lineWidth = 2;
-            ctx.strokeRect(w.x, w.y, w.w, w.h);
-          } else if (w.kind === 'screen') {
-            ctx.fillStyle = '#3E2013';
+          if (w.broken || w.kind === 'water') continue;
+          ctx.save();
+          // Ground ambient drop shadow
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.56)';
+          ctx.fillRect(w.x + 8, w.y + 10, w.w, w.h);
+
+          if (w.kind === 'pillar') {
+            // 2.5D Palace Architectural Square Marble-Base Lacquer Column with Tiled Cap
+            ctx.fillStyle = '#57534E';
+            ctx.fillRect(w.x - 3, w.y + w.h - 8, w.w + 6, 10);
+            ctx.fillStyle = '#7F1D1D';
+            ctx.fillRect(w.x + 2, w.y + 10, w.w - 4, w.h - 14);
+            ctx.fillStyle = roofPat || '#1E293B';
+            ctx.fillRect(w.x, w.y, w.w, w.h - 12);
+            ctx.strokeStyle = '#94A3B8';
+            ctx.lineWidth = 1.5;
+            ctx.strokeRect(w.x, w.y, w.w, w.h - 12);
             ctx.strokeStyle = '#D97706';
+            ctx.strokeRect(w.x + 4, w.y + 4, w.w - 8, w.h - 20);
+          } else if (w.kind === 'screen') {
+            // 2.5D Palace Carved Shadow-Wall (照壁/影壁) with Dark Tiled Eave & Crimson Silk Relief
+            const eaveH = Math.max(12, Math.floor(w.h * 0.52));
+            ctx.fillStyle = '#451A03';
+            ctx.fillRect(w.x, w.y + eaveH, w.w, w.h - eaveH);
+            ctx.fillStyle = '#7F1D1D';
+            ctx.fillRect(w.x + 8, w.y + eaveH + 2, w.w - 16, Math.max(4, w.h - eaveH - 4));
+            ctx.fillStyle = roofPat || '#1E293B';
+            ctx.fillRect(w.x - 2, w.y, w.w + 4, eaveH);
+            ctx.strokeStyle = '#B45309';
             ctx.lineWidth = 2;
-            ctx.fillRect(w.x, w.y, w.w, w.h);
-            ctx.strokeRect(w.x, w.y, w.w, w.h);
+            ctx.strokeRect(w.x - 2, w.y, w.w + 4, eaveH);
           } else if (w.kind === 'secret_wall') {
-            ctx.fillStyle = '#4C1D12';
-            ctx.strokeStyle = '#FBBF24';
-            ctx.lineWidth = 2.5;
-            ctx.setLineDash([6, 4]);
+            // Pryable Golden Nanmu Secret Vault Door with glowing cracks
+            const dmgRatio = 1 - Math.max(0, (w.hp ?? 100) / 100);
+            const nwGrad = ctx.createLinearGradient(w.x, w.y, w.x, w.y + w.h);
+            nwGrad.addColorStop(0, '#78350F');
+            nwGrad.addColorStop(1, '#451A03');
+            ctx.fillStyle = nwGrad;
             ctx.fillRect(w.x, w.y, w.w, w.h);
-            ctx.strokeRect(w.x, w.y, w.w, w.h);
+            ctx.strokeStyle = '#FBBF24';
+            ctx.lineWidth = 3;
+            ctx.setLineDash([8, 4]);
+            ctx.strokeRect(w.x + 1, w.y + 1, w.w - 2, w.h - 2);
             ctx.setLineDash([]);
+            if (dmgRatio > 0.05) {
+              ctx.strokeStyle = '#FDE047';
+              ctx.lineWidth = 2 + dmgRatio * 3;
+              ctx.beginPath();
+              ctx.moveTo(w.x + w.w * 0.3, w.y + 2);
+              ctx.lineTo(w.x + w.w * 0.5, w.y + w.h * 0.55);
+              ctx.lineTo(w.x + w.w * 0.68, w.y + w.h - 2);
+              ctx.stroke();
+            }
             if (w.label) {
+              ctx.fillStyle = 'rgba(15, 10, 6, 0.85)';
+              ctx.fillRect(w.x + w.w / 2 - 96, w.y - 28, 192, 22);
+              ctx.strokeStyle = 'rgba(251, 191, 36, 0.7)';
+              ctx.lineWidth = 1;
+              ctx.strokeRect(w.x + w.w / 2 - 96, w.y - 28, 192, 22);
               ctx.fillStyle = '#FDE047';
               ctx.font = 'bold 12px "PingFang SC", sans-serif';
               ctx.textAlign = 'center';
-              ctx.fillText(w.label, w.x + w.w / 2, w.y - 8);
+              ctx.fillText(w.label, w.x + w.w / 2, w.y - 13);
             }
           } else {
-            ctx.fillStyle = '#1E1410';
-            ctx.strokeStyle = '#573B26';
-            ctx.lineWidth = 2;
-            ctx.fillRect(w.x, w.y, w.w, w.h);
-            ctx.strokeRect(w.x, w.y, w.w, w.h);
+            // 2.5D Palace Wall with Tubular Clay Roof Cap + Vermilion Facade
+            if (w.w >= w.h) {
+              const faceH = Math.min(12, Math.floor(w.h * 0.4));
+              const roofH = w.h - faceH;
+              ctx.fillStyle = roofPat || '#1E293B';
+              ctx.fillRect(w.x, w.y, w.w, roofH);
+              // Grey stone ridge beam
+              ctx.fillStyle = '#475569';
+              ctx.fillRect(w.x, w.y + Math.floor(roofH * 0.42), w.w, 4);
+              // 3D Vermilion lower wall facade
+              ctx.fillStyle = '#6D1B16';
+              ctx.fillRect(w.x, w.y + roofH, w.w, faceH);
+              ctx.strokeStyle = '#334155';
+              ctx.lineWidth = 2;
+              ctx.strokeRect(w.x, w.y, w.w, w.h);
+            } else {
+              ctx.fillStyle = roofPat || '#1E293B';
+              ctx.fillRect(w.x, w.y, w.w, w.h);
+              ctx.fillStyle = '#475569';
+              ctx.fillRect(w.x + Math.floor(w.w * 0.44), w.y, 4, w.h);
+              ctx.strokeStyle = '#334155';
+              ctx.lineWidth = 2;
+              ctx.strokeRect(w.x, w.y, w.w, w.h);
+            }
           }
+          ctx.restore();
         }
 
-        // Room Labels
+        // Room Plaque Labels
         ctx.font = 'bold 13px "PingFang SC", sans-serif';
         ctx.textAlign = 'center';
         for (const rl of mapCfg.roomLabels) {
-          ctx.fillStyle = 'rgba(253, 230, 138, 0.52)';
+          const tw = ctx.measureText(rl.text).width + 20;
+          ctx.fillStyle = 'rgba(12, 8, 6, 0.72)';
+          ctx.fillRect(rl.x - tw / 2, rl.y - 15, tw, 22);
+          ctx.strokeStyle = 'rgba(245, 185, 75, 0.35)';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(rl.x - tw / 2, rl.y - 15, tw, 22);
+          ctx.fillStyle = '#FDE68A';
           ctx.fillText(rl.text, rl.x, rl.y);
         }
 
-        // D. Treasure Chests + Radial Search Ring + X-Ray Mythic Preview
-        for (const ch of s.chests) {
-          const def = TREASURES[ch.lootDefId];
-          ctx.save();
-          ctx.translate(ch.x, ch.y);
-          if (ch.opened) {
-            ctx.fillStyle = 'rgba(41, 37, 36, 0.55)';
-            ctx.strokeStyle = '#57534E';
-            ctx.lineWidth = 1.5;
-            ctx.fillRect(-18, -14, 36, 28);
-            ctx.strokeRect(-18, -14, 36, 28);
-          } else {
-            // Glow aura by chest tier
-            const glowColor =
-              godXray && def.rarity === 'mythic'
-                ? 'rgba(244, 63, 94, 0.7)'
-                : ch.tier === 'dragon_vault'
-                ? 'rgba(251, 191, 36, 0.42)'
-                : ch.tier === 'rosewood'
-                ? 'rgba(192, 132, 252, 0.25)'
-                : 'rgba(214, 211, 209, 0.14)';
-
-            ctx.fillStyle = glowColor;
-            ctx.beginPath();
-            ctx.arc(0, 0, ch.tier === 'dragon_vault' ? 32 : 24, 0, Math.PI * 2);
-            ctx.fill();
-
-            ctx.fillStyle =
-              ch.tier === 'dragon_vault' ? '#92400E' : ch.tier === 'rosewood' ? '#581C87' : '#44403C';
-            ctx.strokeStyle =
-              ch.tier === 'dragon_vault' ? '#FBBF24' : ch.tier === 'rosewood' ? '#C084FC' : '#A8A29E';
-            ctx.lineWidth = 2.5;
-            ctx.fillRect(-19, -14, 38, 28);
-            ctx.strokeRect(-19, -14, 38, 28);
-
-            // Gold clasp
-            ctx.fillStyle = '#FDE047';
-            ctx.fillRect(-4, -3, 8, 6);
-
-            if (godXray) {
-              ctx.fillStyle = RARITY_META[def.rarity].color;
-              ctx.font = 'bold 11px "PingFang SC", sans-serif';
-              ctx.textAlign = 'center';
-              ctx.fillText(`👁️${def.name}`, 0, 28);
-            }
-
-            // Radial Search Wheel when prying!
-            if (ch.progress > 0.02) {
-              const ratio = Math.min(1, ch.progress / ch.searchSeconds);
-              ctx.beginPath();
-              ctx.arc(0, -28, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
-              ctx.strokeStyle = '#FBBF24';
-              ctx.lineWidth = 4;
-              ctx.stroke();
-            }
-          }
-          ctx.restore();
-        }
-
-        // E. Tossed Distraction Coins & Smoke Clouds
+        // D. Tossed Distraction Silver Ingots & Smoke Clouds (Ground Layer)
         for (const c of s.coins) {
           ctx.save();
           ctx.translate(c.x, c.y);
-          ctx.strokeStyle = 'rgba(253, 224, 71, 0.55)';
+          ctx.strokeStyle = 'rgba(253, 224, 71, 0.65)';
           ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.arc(0, 0, 12 + ((6 - c.ttl) * 18) % 36, 0, Math.PI * 2);
+          ctx.arc(0, 0, 12 + ((6 - c.ttl) * 20) % 38, 0, Math.PI * 2);
           ctx.stroke();
-          drawTreasureIcon(ctx, 'silver_ingot', 0, 0, 22);
+          drawTreasureIcon(ctx, 'silver_ingot', 0, 0, 34);
           ctx.restore();
         }
 
+        // E. Guard Raycasted Lantern Light Cones (Projected from Guard's Handheld Lantern!)
+        for (const g of s.guards) {
+          if (g.state === 'stunned') continue;
+          const facingRight = Math.cos(g.angle) >= -0.05;
+          const lx = g.x + (facingRight ? 22 : -22);
+          const ly = g.y - 6;
+          ctx.save();
+          ctx.beginPath();
+          ctx.moveTo(lx, ly);
+          const rays = 22;
+          for (let i = 0; i <= rays; i++) {
+            const a = g.angle - g.visionHalfAngle + (g.visionHalfAngle * 2 * i) / rays;
+            const hit = castVisionRay({ x: g.x, y: g.y }, a, g.visionRange, s.walls);
+            ctx.lineTo(hit.x, hit.y);
+          }
+          ctx.closePath();
+          const coneGrad = ctx.createRadialGradient(lx, ly, 6, lx, ly, g.visionRange);
+          if (g.state === 'chase') {
+            coneGrad.addColorStop(0, 'rgba(239, 68, 68, 0.52)');
+            coneGrad.addColorStop(1, 'rgba(239, 68, 68, 0.02)');
+          } else if (g.state === 'investigate') {
+            coneGrad.addColorStop(0, 'rgba(250, 204, 21, 0.42)');
+            coneGrad.addColorStop(1, 'rgba(250, 204, 21, 0.02)');
+          } else {
+            coneGrad.addColorStop(0, 'rgba(251, 146, 60, 0.36)');
+            coneGrad.addColorStop(1, 'rgba(251, 146, 60, 0.01)');
+          }
+          ctx.fillStyle = coneGrad;
+          ctx.fill();
+          ctx.restore();
+        }
+
+        // F. Y-Sorted 2.5D Entities (Treasure Chests, Jinyiwei Guards & Night Raider!)
+        const bagTotals = computeBagTotals(s.bagRef);
+        type RenderItem =
+          | { kind: 'chest'; y: number; ch: ChestEntity }
+          | { kind: 'guard'; y: number; g: GuardEntity }
+          | { kind: 'player'; y: number };
+
+        const renderQueue: RenderItem[] = [
+          ...s.chests.map((ch) => ({ kind: 'chest' as const, y: ch.y, ch })),
+          ...s.guards.map((g) => ({ kind: 'guard' as const, y: g.y, g })),
+          { kind: 'player' as const, y: s.player.y },
+        ].sort((a, b) => a.y - b.y);
+
+        for (const item of renderQueue) {
+          if (item.kind === 'chest') {
+            const ch = item.ch;
+            const def = TREASURES[ch.lootDefId];
+            ctx.save();
+            ctx.translate(ch.x, ch.y);
+            // Ground contact shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+            ctx.beginPath();
+            ctx.ellipse(0, 18, 28, 12, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (ch.opened) {
+              const openImg = getSpriteImg('chest_open');
+              if (openImg) {
+                ctx.globalAlpha = 0.85;
+                ctx.drawImage(openImg, -32, -32, 64, 64);
+              }
+            } else {
+              const glowCol =
+                godXray && def.rarity === 'mythic'
+                  ? 'rgba(244, 63, 94, 0.65)'
+                  : ch.tier === 'dragon_vault'
+                  ? 'rgba(251, 191, 36, 0.38)'
+                  : ch.tier === 'rosewood'
+                  ? 'rgba(192, 132, 252, 0.24)'
+                  : 'rgba(251, 191, 36, 0.1)';
+              const cGlow = ctx.createRadialGradient(0, 0, 6, 0, 0, ch.tier === 'dragon_vault' ? 44 : 32);
+              cGlow.addColorStop(0, glowCol);
+              cGlow.addColorStop(1, 'rgba(0,0,0,0)');
+              ctx.fillStyle = cGlow;
+              ctx.beginPath();
+              ctx.arc(0, 0, ch.tier === 'dragon_vault' ? 44 : 32, 0, Math.PI * 2);
+              ctx.fill();
+
+              const chestSprite = getSpriteImg(
+                ch.tier === 'dragon_vault'
+                  ? 'chest_dragon'
+                  : ch.tier === 'rosewood'
+                  ? 'chest_rosewood'
+                  : 'chest_wood'
+              );
+              const cSize = ch.tier === 'dragon_vault' ? 72 : 62;
+              if (chestSprite) {
+                ctx.drawImage(chestSprite, -cSize / 2, -cSize / 2 - 4, cSize, cSize);
+              }
+
+              if (godXray) {
+                ctx.fillStyle = 'rgba(10, 8, 6, 0.85)';
+                ctx.fillRect(-52, 24, 104, 18);
+                ctx.fillStyle = RARITY_META[def.rarity].color;
+                ctx.font = 'bold 11px "PingFang SC", sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(`👁️${def.name}`, 0, 37);
+              }
+
+              if (ch.progress > 0.02) {
+                const ratio = Math.min(1, ch.progress / ch.searchSeconds);
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.72)';
+                ctx.beginPath();
+                ctx.arc(0, -38, 16, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.beginPath();
+                ctx.arc(0, -38, 13, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * ratio);
+                ctx.strokeStyle = '#FBBF24';
+                ctx.lineWidth = 4;
+                ctx.stroke();
+              }
+            }
+            ctx.restore();
+          } else if (item.kind === 'guard') {
+            const g = item.g;
+            const gImg = getSpriteImg(g.elite ? 'elite_guard' : 'guard');
+            const facingRight = Math.cos(g.angle) >= -0.05;
+            const stridePhase = ts * (g.state === 'chase' ? 0.018 : 0.011) + g.x * 0.02;
+            const bobY = g.state === 'stunned' ? 6 : -Math.abs(Math.sin(stridePhase)) * 5;
+            const tilt = g.state === 'stunned' ? 0.55 : Math.sin(stridePhase) * 0.055;
+
+            ctx.save();
+            ctx.translate(g.x, g.y);
+            // Ground shadow under boots
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.62)';
+            ctx.beginPath();
+            ctx.ellipse(0, 22, 24, 10, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.save();
+            ctx.translate(0, bobY);
+            if (!facingRight) ctx.scale(-1, 1);
+            ctx.rotate(tilt);
+            if (g.state === 'stunned') ctx.globalAlpha = 0.68;
+            const gSize = g.elite ? 92 : 84;
+            if (gImg) {
+              ctx.drawImage(gImg, -gSize / 2, -gSize / 2 - 10, gSize, gSize);
+            }
+            ctx.restore();
+
+            // Guard State Badge above Hat
+            ctx.font = 'bold 12px "PingFang SC", sans-serif';
+            ctx.textAlign = 'center';
+            if (g.state === 'stunned') {
+              ctx.fillStyle = 'rgba(15, 23, 42, 0.85)';
+              ctx.fillRect(-34, -56, 68, 20);
+              ctx.fillStyle = '#38BDF8';
+              ctx.fillText('💫闷棍晕厥', 0, -42);
+            } else if (g.state === 'chase') {
+              ctx.fillStyle = 'rgba(127, 29, 29, 0.9)';
+              ctx.fillRect(-36, -58, 72, 20);
+              ctx.fillStyle = '#FCA5A5';
+              ctx.fillText('❗拔刀追砍', 0, -44);
+            } else if (g.state === 'investigate') {
+              ctx.fillStyle = 'rgba(69, 26, 3, 0.88)';
+              ctx.fillRect(-36, -56, 72, 20);
+              ctx.fillStyle = '#FDE047';
+              ctx.fillText('❓上前查探', 0, -42);
+            }
+            ctx.restore();
+          } else {
+            // Night Raider Player Sprite with 60fps Martial Stride Animation!
+            const rImg = getSpriteImg('raider');
+            const spdNow = Math.hypot(s.player.vx, s.player.vy);
+            const isMoving = spdNow > 12;
+            const facingRight = Math.cos(s.player.angle) >= -0.05;
+            const runPhase = ts * 0.019;
+            const bobY = isMoving ? -Math.abs(Math.sin(runPhase)) * 6.5 : Math.sin(ts * 0.004) * 1.5;
+            const lean = isMoving ? Math.sin(runPhase) * 0.08 + 0.05 : 0;
+
+            ctx.save();
+            ctx.translate(s.player.x, s.player.y);
+
+            // Warm subtle night-vision torch aura around Raider
+            const pGlow = ctx.createRadialGradient(0, 0, 8, 0, 0, 145);
+            pGlow.addColorStop(0, 'rgba(251, 191, 36, 0.22)');
+            pGlow.addColorStop(1, 'rgba(251, 191, 36, 0)');
+            ctx.fillStyle = pGlow;
+            ctx.beginPath();
+            ctx.arc(0, 0, 145, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Ground shadow
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+            ctx.beginPath();
+            ctx.ellipse(0, 22, 22, 9, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            if (s.player.invuln > 0 && Math.floor(ts / 80) % 2 === 0) {
+              ctx.globalAlpha = 0.45;
+            } else if (s.player.smokeStealth > 0) {
+              ctx.globalAlpha = 0.62;
+            }
+
+            // Mythic/Legendary Loot Shimmer Aura if carrying big treasure
+            if (bagTotals.mythicCount > 0) {
+              const mGlow = ctx.createRadialGradient(0, -8, 4, 0, -8, 38);
+              mGlow.addColorStop(0, 'rgba(244, 63, 94, 0.45)');
+              mGlow.addColorStop(1, 'rgba(244, 63, 94, 0)');
+              ctx.fillStyle = mGlow;
+              ctx.beginPath();
+              ctx.arc(0, -8, 38, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            ctx.save();
+            ctx.translate(0, bobY);
+            if (!facingRight) ctx.scale(-1, 1);
+            ctx.rotate(lean);
+            if (rImg) {
+              ctx.drawImage(rImg, -41, -50, 82, 82);
+            }
+            ctx.restore();
+            ctx.restore();
+          }
+        }
+
+        // G. Volumetric Purple Smoke Clouds (Foreground Stealth Cover)
         for (const sm of s.smokes) {
-          const g = ctx.createRadialGradient(sm.x, sm.y, 10, sm.x, sm.y, sm.radius);
-          g.addColorStop(0, 'rgba(147, 51, 234, 0.58)');
-          g.addColorStop(1, 'rgba(88, 28, 135, 0)');
+          const g = ctx.createRadialGradient(sm.x, sm.y, 12, sm.x, sm.y, sm.radius);
+          g.addColorStop(0, 'rgba(126, 34, 206, 0.62)');
+          g.addColorStop(0.65, 'rgba(88, 28, 135, 0.34)');
+          g.addColorStop(1, 'rgba(59, 7, 100, 0)');
           ctx.fillStyle = g;
           ctx.beginPath();
           ctx.arc(sm.x, sm.y, sm.radius, 0, Math.PI * 2);
           ctx.fill();
         }
-
-        // F. Raycasted Clipped Guard Lantern Vision Cones + Guards!
-        for (const g of s.guards) {
-          if (g.state !== 'stunned') {
-            ctx.save();
-            ctx.beginPath();
-            ctx.moveTo(g.x, g.y);
-            const rays = 18;
-            for (let i = 0; i <= rays; i++) {
-              const a = g.angle - g.visionHalfAngle + (g.visionHalfAngle * 2 * i) / rays;
-              const hit = castVisionRay({ x: g.x, y: g.y }, a, g.visionRange, s.walls);
-              ctx.lineTo(hit.x, hit.y);
-            }
-            ctx.closePath();
-            const coneGrad = ctx.createRadialGradient(g.x, g.y, 8, g.x, g.y, g.visionRange);
-            if (g.state === 'chase') {
-              coneGrad.addColorStop(0, 'rgba(239, 68, 68, 0.46)');
-              coneGrad.addColorStop(1, 'rgba(239, 68, 68, 0.02)');
-            } else if (g.state === 'investigate') {
-              coneGrad.addColorStop(0, 'rgba(250, 204, 21, 0.36)');
-              coneGrad.addColorStop(1, 'rgba(250, 204, 21, 0.02)');
-            } else {
-              coneGrad.addColorStop(0, 'rgba(249, 115, 22, 0.28)');
-              coneGrad.addColorStop(1, 'rgba(249, 115, 22, 0.01)');
-            }
-            ctx.fillStyle = coneGrad;
-            ctx.fill();
-            ctx.restore();
-          }
-
-          // Guard Body & Hat
-          ctx.save();
-          ctx.translate(g.x, g.y);
-          ctx.fillStyle = g.state === 'stunned' ? '#57534E' : g.elite ? '#991B1B' : '#7C2D12';
-          ctx.strokeStyle = g.elite ? '#FBBF24' : '#FDBA74';
-          ctx.lineWidth = 2.5;
-          ctx.beginPath();
-          ctx.arc(0, 0, g.radius, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-
-          // Red Lantern in front of guard
-          if (g.state !== 'stunned') {
-            const lx = Math.cos(g.angle) * 20;
-            const ly = Math.sin(g.angle) * 20;
-            ctx.fillStyle = g.state === 'chase' ? '#EF4444' : '#FB923C';
-            ctx.beginPath();
-            ctx.arc(lx, ly, 5.5, 0, Math.PI * 2);
-            ctx.fill();
-          }
-
-          ctx.font = 'bold 14px sans-serif';
-          ctx.textAlign = 'center';
-          if (g.state === 'stunned') {
-            ctx.fillStyle = '#FDE047';
-            ctx.fillText('💫晕厥', 0, -22);
-          } else if (g.state === 'chase') {
-            ctx.fillStyle = '#EF4444';
-            ctx.fillText('❗追砍', 0, -22);
-          } else if (g.state === 'investigate') {
-            ctx.fillStyle = '#FACC15';
-            ctx.fillText('❓捡银子', 0, -22);
-          }
-          ctx.restore();
-        }
-
-        // G. Night Raider Player + Growing Golden Loot Sack on Back!
-        const bagTotals = computeBagTotals(s.bagRef);
-        ctx.save();
-        ctx.translate(s.player.x, s.player.y);
-        if (s.player.invuln > 0 && Math.floor(ts / 80) % 2 === 0) {
-          ctx.globalAlpha = 0.45;
-        }
-        if (s.player.smokeStealth > 0) {
-          ctx.globalAlpha = 0.55;
-        }
-
-        // Player Torchlight Soft Aura
-        const pGlow = ctx.createRadialGradient(0, 0, 6, 0, 0, 125);
-        pGlow.addColorStop(0, 'rgba(251, 191, 36, 0.2)');
-        pGlow.addColorStop(1, 'rgba(251, 191, 36, 0)');
-        ctx.fillStyle = pGlow;
-        ctx.beginPath();
-        ctx.arc(0, 0, 125, 0, Math.PI * 2);
-        ctx.fill();
-
-        // Growing Golden Treasure Sack carried behind Raider!
-        if (bagTotals.totalValueWan > 0) {
-          const sackR = Math.min(18, 7 + Math.log10(bagTotals.totalValueWan + 1) * 3.6);
-          const bx = -Math.cos(s.player.angle) * 14;
-          const by = -Math.sin(s.player.angle) * 14;
-          ctx.fillStyle = bagTotals.mythicCount > 0 ? '#F43F5E' : '#F59E0B';
-          ctx.strokeStyle = '#FEF08A';
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(bx, by, sackR, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.stroke();
-        }
-
-        // Raider Body
-        ctx.fillStyle = '#18181B';
-        ctx.strokeStyle = '#38BDF8';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-        ctx.arc(0, 0, 16, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.stroke();
-
-        // Facing headband indicator
-        ctx.fillStyle = '#38BDF8';
-        ctx.beginPath();
-        ctx.arc(Math.cos(s.player.angle) * 11, Math.sin(s.player.angle) * 11, 4, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.restore();
 
         // H. Particles & Floating Loot Pops
         for (const pt of s.particles) {
@@ -946,24 +1115,45 @@ export const RaidActionView: React.FC<RaidActionViewProps> = ({
         ctx.font = 'bold 14px "PingFang SC", sans-serif';
         ctx.textAlign = 'center';
         for (const pop of s.pops) {
-          ctx.fillStyle = 'rgba(0,0,0,0.75)';
-          ctx.fillText(pop.text, pop.x + 1, pop.y + 1);
+          const pw = ctx.measureText(pop.text).width + 18;
+          ctx.fillStyle = 'rgba(9, 7, 6, 0.82)';
+          ctx.fillRect(pop.x - pw / 2, pop.y - 15, pw, 22);
           ctx.fillStyle = pop.color;
           ctx.fillText(pop.text, pop.x, pop.y);
         }
 
-        // Extraction Progress Bar right above Dock
+        // Extraction Progress Bar right above Boat
         if (s.extractTimer > 0.05) {
-          ctx.fillStyle = '#10B981';
-          ctx.font = 'bold 16px "PingFang SC", sans-serif';
+          ctx.fillStyle = 'rgba(6, 78, 59, 0.92)';
+          ctx.fillRect(ez.x - 108, ez.y - 74, 216, 26);
+          ctx.strokeStyle = '#34D399';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(ez.x - 108, ez.y - 74, 216, 26);
+          ctx.fillStyle = '#A7F3D0';
+          ctx.font = 'bold 14px "PingFang SC", sans-serif';
           ctx.fillText(
-            `⛵ 正在装船撤离 ${Math.min(100, Math.round((s.extractTimer / 1.8) * 100))}%...`,
+            `⛵ 正在登船撤离 ${Math.min(100, Math.round((s.extractTimer / 1.8) * 100))}%...`,
             ez.x,
-            ez.y - 52
+            ez.y - 56
           );
         }
 
         ctx.restore();
+
+        // Atmospheric Palace Night Vignette around Viewport Edges
+        const vig = ctx.createRadialGradient(
+          vw / 2,
+          vh / 2,
+          Math.min(vw, vh) * 0.34,
+          vw / 2,
+          vh / 2,
+          Math.max(vw, vh) * 0.76
+        );
+        vig.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        vig.addColorStop(1, 'rgba(4, 5, 10, 0.58)');
+        ctx.fillStyle = vig;
+        ctx.fillRect(0, 0, vw, vh);
+
         ctx.restore();
       }
 

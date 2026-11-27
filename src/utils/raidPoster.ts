@@ -5,6 +5,7 @@ import {
   RARITY_META,
   TREASURES,
 } from '../engine/lootCatalog';
+import { preloadGameAtlas } from '../engine/spriteAtlas';
 import { formatSilver } from '../engine/gameData';
 import { RaiderProfile, RaidSummary } from '../types/raid';
 import { IS_PURE_PLATFORM_MODE } from './raiderSave';
@@ -13,6 +14,7 @@ export async function renderRaidLootPoster(
   summary: RaidSummary,
   profile: RaiderProfile
 ): Promise<string> {
+  await preloadGameAtlas();
   const W = 1080;
   const H = 1560;
   const canvas = document.createElement('canvas');

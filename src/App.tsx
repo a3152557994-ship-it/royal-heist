@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import confetti from 'canvas-confetti';
 import {
   Crown,
@@ -23,7 +23,8 @@ import {
 } from 'lucide-react';
 import { MapId, RaiderProfile, RaidSummary } from './types/raid';
 import { RAID_MAPS } from './engine/raidMaps';
-import { drawTreasureIcon, RARITY_META, TREASURES } from './engine/lootCatalog';
+import { RARITY_META, TREASURES } from './engine/lootCatalog';
+import { getTreasureSrc, preloadGameAtlas } from './engine/spriteAtlas';
 import { formatSilver } from './engine/gameData';
 import {
   exportRaiderSaveCode,
@@ -66,17 +67,15 @@ const SHOWCASE_TREASURE_IDS = [
 ];
 
 const CanvasTreasureBadge: React.FC<{ defId: string; size?: number }> = ({ defId, size = 44 }) => {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-  useEffect(() => {
-    const cvs = ref.current;
-    if (!cvs) return;
-    const ctx = cvs.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, size, size);
-    const def = TREASURES[defId];
-    if (def) drawTreasureIcon(ctx, def.iconType, size / 2, size / 2, size * 0.84);
-  }, [defId, size]);
-  return <canvas ref={ref} width={size} height={size} className="shrink-0" />;
+  const def = TREASURES[defId];
+  return (
+    <img
+      src={getTreasureSrc(defId)}
+      alt={def?.name || defId}
+      style={{ width: size, height: size }}
+      className="shrink-0 object-contain drop-shadow-[0_4px_8px_rgba(0,0,0,0.85)]"
+    />
+  );
 };
 
 export const App: React.FC = () => {
@@ -99,6 +98,11 @@ export const App: React.FC = () => {
   const [licenseFeedback, setLicenseFeedback] = useState<{ ok: boolean; msg: string } | null>(null);
 
   const isPro = !IS_PURE_PLATFORM_MODE && Boolean(profile.proLicenseToken);
+
+  // Preload 2.5D high-res sprites, tiles, and 12 painted antiques immediately
+  useEffect(() => {
+    preloadGameAtlas();
+  }, []);
 
   // Persist profile automatically
   useEffect(() => {

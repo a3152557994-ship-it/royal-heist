@@ -1,14 +1,14 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { RotateCw, Trash2, X, PackageCheck } from 'lucide-react';
 import { BagItem } from '../types/raid';
 import {
   canPlaceInBag,
   computeBagTotals,
-  drawTreasureIcon,
   itemFootprint,
   RARITY_META,
   TREASURES,
 } from '../engine/lootCatalog';
+import { getTreasureSrc } from '../engine/spriteAtlas';
 import { formatSilver } from '../engine/gameData';
 import { sound } from '../audio/soundEngine';
 
@@ -23,18 +23,24 @@ interface GridBagModalProps {
   onClose: () => void;
 }
 
-const TreasureThumb: React.FC<{ defId: string; size?: number }> = ({ defId, size = 46 }) => {
-  const ref = useRef<HTMLCanvasElement | null>(null);
-  useEffect(() => {
-    const cvs = ref.current;
-    if (!cvs) return;
-    const ctx = cvs.getContext('2d');
-    if (!ctx) return;
-    ctx.clearRect(0, 0, size, size);
-    const def = TREASURES[defId];
-    if (def) drawTreasureIcon(ctx, def.iconType, size / 2, size / 2, size * 0.85);
-  }, [defId, size]);
-  return <canvas ref={ref} width={size} height={size} className="pointer-events-none" />;
+const TreasureThumb: React.FC<{ defId: string; size?: number; rotated?: boolean }> = ({
+  defId,
+  size = 46,
+  rotated = false,
+}) => {
+  const def = TREASURES[defId];
+  return (
+    <img
+      src={getTreasureSrc(defId)}
+      alt={def?.name || defId}
+      style={{
+        width: size,
+        height: size,
+        transform: rotated ? 'rotate(90deg)' : undefined,
+      }}
+      className="object-contain pointer-events-none select-none drop-shadow-[0_4px_8px_rgba(0,0,0,0.85)]"
+    />
+  );
 };
 
 export const GridBagModal: React.FC<GridBagModalProps> = ({
@@ -255,7 +261,11 @@ export const GridBagModal: React.FC<GridBagModalProps> = ({
                     boxShadow: `0 0 12px ${meta.glow}`,
                   }}
                 >
-                  <TreasureThumb defId={def.id} size={Math.min(fp.w, fp.h) * cellPx * 0.68} />
+                  <TreasureThumb
+                    defId={def.id}
+                    size={Math.min(fp.w * cellPx - 10, fp.h * cellPx - 26)}
+                    rotated={item.rotated}
+                  />
                   <span className="text-[10px] font-extrabold text-white truncate max-w-full leading-tight">
                     {def.name.slice(0, 4)}
                   </span>
